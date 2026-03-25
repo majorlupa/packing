@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <title>Packing App</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <h2>Kolejki</h2>
+      <ul>
+        <li class="queue-item active" data-queue="pending">
+          Oczekujące <span id="count-pending" class="badge">0</span>
+        </li>
+        <li class="queue-item" data-queue="picking">
+          Kompletowanie <span id="count-picking" class="badge">0</span>
+        </li>
+        <li class="queue-item" data-queue="packing">
+          Pakowanie <span id="count-packing" class="badge">0</span>
+        </li>
+        <li class="queue-item" data-queue="done">
+          Gotowe <span id="count-done" class="badge">0</span>
+        </li>
+      </ul>
+      <hr />
+      <button id="btn-sync">↻ Pobierz zamówienia</button>
+      <button id="btn-auth">Autoryzuj Allegro</button>
+      <button id="btn-seed" style="opacity:0.5;font-size:11px">+ Testowe zamówienia</button>
+      <button id="btn-config">⚙ Edytuj API</button>
+      <button id="btn-invoice-settings">📄 Ustawienia dokumentu</button>
+    </aside>
+
+    <main id="content">
+      <!-- Filled by app.js -->
+    </main>
+  </div>
+
+  <div id="config-modal" class="hidden">
+    <div id="config-box">
+      <h3>⚙ Konfiguracja API (.env)</h3>
+      <textarea id="config-content" spellcheck="false"></textarea>
+      <p id="config-note" class="hidden" style="color:#4ecca3;font-size:13px"></p>
+      <div class="modal-buttons">
+        <button id="config-save" class="btn btn-primary">Zapisz</button>
+        <button id="config-cancel" class="btn btn-secondary">Zamknij</button>
+      </div>
+    </div>
+  </div>
+
+<div id="invoice-settings-modal" class="hidden">
+  <div id="invoice-settings-box">
+    <h3>📄 Ustawienia dokumentu sprzedażowego</h3>
+    <p style="font-size:12px;color:#888;margin:0">Zaznacz pola które mają pojawiać się na wydruku.</p>
+    <div class="settings-checks">
+      <label><input type="checkbox" id="inv-buyer-name"> Nazwa kupującego</label>
+      <label><input type="checkbox" id="inv-buyer-address"> Adres kupującego</label>
+      <label><input type="checkbox" id="inv-items"> Lista produktów</label>
+      <label><input type="checkbox" id="inv-courier"> Kurier</label>
+      <label><input type="checkbox" id="inv-pickup-point"> Punkt odbioru (paczkomat)</label>
+      <label><input type="checkbox" id="inv-allegro-id"> Numer zamówienia Allegro</label>
+    </div>
+    <div class="settings-field">
+      <label>Tekst własny (maks. 160 znaków)</label>
+      <textarea id="inv-free-text" rows="2" maxlength="160" placeholder="np. Dziękujemy za zakup!"></textarea>
+      <span id="inv-free-text-count" style="font-size:11px;color:#888;text-align:right">0 / 160</span>
+    </div>
+    <p id="invoice-settings-note" class="hidden" style="color:#4ecca3;font-size:13px"></p>
+    <div class="modal-buttons">
+      <button id="invoice-settings-save" class="btn btn-primary">Zapisz</button>
+      <button id="invoice-settings-cancel" class="btn btn-secondary">Zamknij</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
