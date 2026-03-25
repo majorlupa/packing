@@ -40,16 +40,33 @@ All of them (InPost paczkomat, InPost kurier, DPD, DHL, etc.). Labels are create
 - **Zebra** label printer — 10x15cm courier stickers (PDF from Allegro API)
 - **A4** regular printer — buyer invoices (HTML rendered in browser)
 
-## Current status (2026-03-23)
+## Current status (2026-03-25)
 
 - Allegro sandbox connected, two test sales created
-- Label endpoint rewritten to use Allegro Shipment Management API (v2 Accept header fix applied)
-- Needs rebuild + end-to-end label print test
+- Label endpoint uses Allegro Shipment Management API (v2 Accept header)
+- Docker compose moved to project folder (`docker-compose.yaml`), removed from exodia
+- Project on GitHub: https://github.com/majorlupa/packing
+
+## UI features implemented
+
+- **Carousel transitions** — slide in/out on prev/next, green flash on GOTOWE
+- **Label guard** — GOTOWE warns if label not printed yet
+- **Allegro ID** on packing cards and done list, with copy button
+- **Settings panel** — sidebar nav item, tabbed: Konfiguracja / Dokumenty / Archiwum (placeholder)
+- **Zakończ dzień** button — checks for missing tracking numbers, warns if any
+- **Gotowe** shows tracking number instead of items (`tracking_number` field on Order model, nullable)
+
+## Architecture notes
+
+- `Order.tracking_number` — nullable field, populated when Allegro shipment tracking is implemented
+- Archive/tombstone system planned but not yet built (Archiwum tab is placeholder)
+- Sync filter for already-shipped orders (via Allegro label status) — designed, not yet implemented
 
 ## Next steps
 
-- Re-login so docker group takes effect (no more sudo needed)
-- Rebuild packing-backend, test label printing with sandbox orders
+- Implement tracking number sync from Allegro shipment management API
+- Build archive (tombstone) system + "Zakończ dzień" persistence
+- Sync filter: skip orders with label number already set on Allegro
 - Test with real Zebra + A4 in production
 - Connect production Allegro account
 

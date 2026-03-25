@@ -6,8 +6,10 @@ let state = {
   currentQueue: 'pending',
   currentCourier: null, // courier filter for pending view
   selectedOrderIds: new Set(),  // for pending → picking list creation
-  packingQueue: [],   // orders currently in packing carousel
-  packingIndex: 0,    // which card is shown
+  packingQueue: [],      // orders currently in packing carousel
+  packingIndex: 0,       // which card is shown
+  packingDirection: null, // 'next' | 'prev' | null
+  settingsTab: 'config',
 };
 
 // ---- Fetch ----
@@ -73,12 +75,15 @@ function renderQueue(queue) {
   document.querySelectorAll('.queue-item').forEach(el => {
     el.classList.toggle('active', el.dataset.queue === queue);
   });
+  const btnSettings = document.getElementById('btn-settings');
+  if (btnSettings) btnSettings.classList.toggle('active', queue === 'settings');
   const content = document.getElementById('content');
 
   if (queue === 'pending') renderPending(content);
   else if (queue === 'picking') renderPicking(content);
   else if (queue === 'packing') renderPacking(content);
   else if (queue === 'done') renderDone(content);
+  else if (queue === 'settings') renderSettings(content);
 }
 
 // ---- Pending view ----
@@ -338,16 +343,25 @@ function renderPackingCard(el) {
   const idx = state.packingIndex;
   const order = orders[idx];
 
+  const animClass = state.packingDirection === 'next' ? 'animate-next'
+                  : state.packingDirection === 'prev' ? 'animate-prev' : '';
+  state.packingDirection = null;
+
   view.innerHTML = `
     <div class="pack-nav">
       <button class="btn btn-secondary" id="btn-prev" ${idx === 0 ? 'disabled' : ''}>← Poprzednie</button>
       <span>${idx + 1} / ${orders.length}</span>
       <button class="btn btn-secondary" id="btn-next" ${idx === orders.length - 1 ? 'disabled' : ''}>Następne →</button>
     </div>
-    <div class="pack-card">
+    <div class="pack-card ${animClass}">
       <button class="btn-icon-red btn-revert-pending" id="btn-revert-pending" title="Cofnij do oczekujących">↩</button>
       <div class="buyer">${order.buyer_name}</div>
       <div class="address">${order.buyer_address}</div>
+      <div class="allegro-id">
+        <span class="allegro-id-label">ID:</span>
+        <span class="allegro-id-value">${order.allegro_id}</span>
+        <button class="btn-copy" title="Kopiuj ID" onclick="navigator.clipboard.writeText('${order.allegro_id}').then(()=>{this.textContent='✓';setTimeout(()=>this.textContent='⧉',1200)})">⧉</button>
+      </div>
       <div class="items">${order.items.map(i => `${i.quantity}x ${i.name}`).join('<br/>')}</div>
       <div class="pack-buttons">
         <button class="btn btn-label" id="btn-label">🖨 Etykieta kurierska</button>
@@ -365,25 +379,40 @@ function renderPackingCard(el) {
     renderPackingCard(document.getElementById('content'));
   });
 
+  let labelClicked = false;
+
   view.querySelector('#btn-prev').addEventListener('click', () => {
+    state.packingDirection = 'prev';
     state.packingIndex--;
     renderPackingCard(document.getElementById('content'));
   });
   view.querySelector('#btn-next').addEventListener('click', () => {
+    state.packingDirection = 'next';
     state.packingIndex++;
     renderPackingCard(document.getElementById('content'));
   });
   view.querySelector('#btn-label').addEventListener('click', () => {
+    labelClicked = true;
+    view.querySelector('#btn-label').classList.add('printed');
+    view.querySelector('#btn-label').textContent = '✓ Etykieta kurierska';
     window.open(`${API}/print/orders/${order.id}/label`, '_blank');
   });
   view.querySelector('#btn-invoice').addEventListener('click', () => {
     window.open(`${API}/print/orders/${order.id}/invoice`, '_blank');
   });
   view.querySelector('#btn-done').addEventListener('click', async () => {
+    if (!labelClicked) {
+      const ok = confirm('Etykieta nie wydrukowana — czy na pewno chcesz oznaczyć jako gotowe?');
+      if (!ok) return;
+    }
+    const card = view.querySelector('.pack-card');
+    card.classList.add('animate-done');
+    await new Promise(r => setTimeout(r, 430));
     await fetch(`${API}/orders/${order.id}/done`, { method: 'POST' });
     await fetchAll();
     state.packingQueue = state.orders.filter(o => o.status === 'packing');
     state.packingIndex = Math.min(state.packingIndex, Math.max(0, state.packingQueue.length - 1));
+    state.packingDirection = null;
     renderPackingCard(document.getElementById('content'));
   });
 }
@@ -403,11 +432,19 @@ function renderDone(el) {
   orders.forEach(order => {
     const card = document.createElement('div');
     card.className = 'order-card';
+    const trackingHtml = order.tracking_number
+      ? `<div class="tracking-number">📦 ${order.tracking_number}</div>`
+      : `<div class="tracking-number missing">— brak numeru śledzenia —</div>`;
     card.innerHTML = `
       <div class="order-info">
         <div class="buyer">${order.buyer_name}</div>
         <div class="address">${order.buyer_address}</div>
-        <div class="items">${order.items.map(i => `<span>${i.quantity}x ${i.name}</span>`).join('')}</div>
+        <div class="allegro-id">
+          <span class="allegro-id-label">ID:</span>
+          <span class="allegro-id-value">${order.allegro_id}</span>
+          <button class="btn-copy" title="Kopiuj ID" onclick="navigator.clipboard.writeText('${order.allegro_id}').then(()=>{this.textContent='✓';setTimeout(()=>this.textContent='⧉',1200)})">⧉</button>
+        </div>
+        ${trackingHtml}
       </div>
       <button class="btn btn-secondary btn-undo" data-id="${order.id}">↩ Cofnij</button>
     `;
@@ -422,10 +459,143 @@ function renderDone(el) {
   });
 }
 
+// ---- Settings view ----
+
+function renderSettings(el) {
+  const activeTab = state.settingsTab;
+
+  el.innerHTML = `
+    <h2>Ustawienia</h2>
+    <div class="settings-tabs">
+      <button class="settings-tab ${activeTab === 'config'    ? 'active' : ''}" data-tab="config">Konfiguracja</button>
+      <button class="settings-tab ${activeTab === 'documents' ? 'active' : ''}" data-tab="documents">Dokumenty</button>
+      <button class="settings-tab ${activeTab === 'archive'   ? 'active' : ''}" data-tab="archive">Archiwum</button>
+    </div>
+    <div id="settings-panel"></div>
+  `;
+
+  el.querySelectorAll('.settings-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.settingsTab = btn.dataset.tab;
+      renderSettings(el);
+    });
+  });
+
+  const panel = el.querySelector('#settings-panel');
+  if (activeTab === 'config')    renderSettingsConfig(panel);
+  if (activeTab === 'documents') renderSettingsDocuments(panel);
+  if (activeTab === 'archive')   renderSettingsArchive(panel);
+}
+
+async function renderSettingsConfig(panel) {
+  const res  = await fetch(`${API}/config/`);
+  const data = await res.json();
+
+  panel.innerHTML = `
+    <div class="settings-section">
+      <p class="settings-desc">Plik konfiguracyjny API (.env)</p>
+      <textarea id="config-content" spellcheck="false">${data.content}</textarea>
+      <p id="config-note" class="settings-note hidden"></p>
+      <div class="settings-actions">
+        <button class="btn btn-primary" id="config-save">Zapisz</button>
+      </div>
+    </div>
+  `;
+
+  panel.querySelector('#config-save').addEventListener('click', async () => {
+    const content = panel.querySelector('#config-content').value;
+    const res  = await fetch(`${API}/config/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    });
+    const result = await res.json();
+    const note = panel.querySelector('#config-note');
+    note.textContent = '✓ ' + result.note;
+    note.classList.remove('hidden');
+  });
+}
+
+async function renderSettingsDocuments(panel) {
+  const res  = await fetch(`${API}/print/invoice-settings`);
+  const data = await res.json();
+
+  panel.innerHTML = `
+    <div class="settings-section">
+      <p class="settings-desc">Zaznacz pola które mają pojawiać się na wydruku.</p>
+      <div class="settings-checks">
+        <label><input type="checkbox" id="inv-buyer-name"    ${(data.show_buyer_name    ?? true) ? 'checked' : ''}> Nazwa kupującego</label>
+        <label><input type="checkbox" id="inv-buyer-address" ${(data.show_buyer_address ?? true) ? 'checked' : ''}> Adres kupującego</label>
+        <label><input type="checkbox" id="inv-items"         ${(data.show_items         ?? true) ? 'checked' : ''}> Lista produktów</label>
+        <label><input type="checkbox" id="inv-courier"       ${(data.show_courier       ?? true) ? 'checked' : ''}> Kurier</label>
+        <label><input type="checkbox" id="inv-pickup-point"  ${(data.show_pickup_point  ?? true) ? 'checked' : ''}> Punkt odbioru (paczkomat)</label>
+        <label><input type="checkbox" id="inv-allegro-id"    ${(data.show_allegro_id    ?? true) ? 'checked' : ''}> Numer zamówienia Allegro</label>
+      </div>
+      <div class="settings-field">
+        <label>Tekst własny (maks. 160 znaków)</label>
+        <textarea id="inv-free-text" rows="2" maxlength="160" placeholder="np. Dziękujemy za zakup!">${data.free_text || ''}</textarea>
+        <span id="inv-free-text-count" class="settings-char-count">${(data.free_text || '').length} / 160</span>
+      </div>
+      <p id="invoice-settings-note" class="settings-note hidden"></p>
+      <div class="settings-actions">
+        <button class="btn btn-primary" id="invoice-settings-save">Zapisz</button>
+      </div>
+    </div>
+  `;
+
+  panel.querySelector('#inv-free-text').addEventListener('input', function() {
+    panel.querySelector('#inv-free-text-count').textContent = `${this.value.length} / 160`;
+  });
+
+  panel.querySelector('#invoice-settings-save').addEventListener('click', async () => {
+    const body = {
+      show_buyer_name:    panel.querySelector('#inv-buyer-name').checked,
+      show_buyer_address: panel.querySelector('#inv-buyer-address').checked,
+      show_items:         panel.querySelector('#inv-items').checked,
+      show_courier:       panel.querySelector('#inv-courier').checked,
+      show_pickup_point:  panel.querySelector('#inv-pickup-point').checked,
+      show_allegro_id:    panel.querySelector('#inv-allegro-id').checked,
+      free_text:          panel.querySelector('#inv-free-text').value,
+    };
+    await fetch(`${API}/print/invoice-settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const note = panel.querySelector('#invoice-settings-note');
+    note.textContent = '✓ Zapisano';
+    note.classList.remove('hidden');
+  });
+}
+
+function renderSettingsArchive(panel) {
+  panel.innerHTML = `
+    <div class="settings-section">
+      <p class="settings-desc">Archiwum zamówień — wkrótce.</p>
+    </div>
+  `;
+}
+
 // ---- Sidebar events ----
 
 document.querySelectorAll('.queue-item').forEach(el => {
   el.addEventListener('click', () => renderQueue(el.dataset.queue));
+});
+
+document.getElementById('btn-settings').addEventListener('click', () => renderQueue('settings'));
+
+document.getElementById('btn-zakoncz').addEventListener('click', () => {
+  const doneOrders = state.orders.filter(o => o.status === 'done');
+  if (!doneOrders.length) {
+    alert('Brak zamówień w Gotowe.');
+    return;
+  }
+  const missing = doneOrders.filter(o => !o.tracking_number);
+  if (missing.length) {
+    const ok = confirm(`${missing.length} ${missing.length === 1 ? 'zamówienie nie ma' : 'zamówień nie ma'} numeru śledzenia. Czy na pewno chcesz zakończyć dzień?`);
+    if (!ok) return;
+  }
+  alert('Funkcja archiwizacji wkrótce.');
 });
 
 document.getElementById('btn-sync').addEventListener('click', async () => {
@@ -445,73 +615,6 @@ document.getElementById('btn-auth').addEventListener('click', async () => {
   }
 });
 
-document.getElementById('btn-config').addEventListener('click', async () => {
-  const res = await fetch(`${API}/config/`);
-  const data = await res.json();
-  document.getElementById('config-content').value = data.content;
-  document.getElementById('config-note').classList.add('hidden');
-  document.getElementById('config-modal').classList.remove('hidden');
-});
-
-document.getElementById('config-cancel').addEventListener('click', () => {
-  document.getElementById('config-modal').classList.add('hidden');
-});
-
-document.getElementById('config-save').addEventListener('click', async () => {
-  const content = document.getElementById('config-content').value;
-  const res = await fetch(`${API}/config/`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
-  });
-  const data = await res.json();
-  const note = document.getElementById('config-note');
-  note.textContent = '✓ ' + data.note;
-  note.classList.remove('hidden');
-});
-
-document.getElementById('btn-invoice-settings').addEventListener('click', async () => {
-  const res = await fetch(`${API}/print/invoice-settings`);
-  const data = await res.json();
-  document.getElementById('inv-buyer-name').checked = data.show_buyer_name ?? true;
-  document.getElementById('inv-buyer-address').checked = data.show_buyer_address ?? true;
-  document.getElementById('inv-items').checked = data.show_items ?? true;
-  document.getElementById('inv-courier').checked = data.show_courier ?? true;
-  document.getElementById('inv-pickup-point').checked = data.show_pickup_point ?? true;
-  document.getElementById('inv-allegro-id').checked = data.show_allegro_id ?? true;
-  document.getElementById('inv-free-text').value = data.free_text || '';
-  document.getElementById('inv-free-text-count').textContent = `${(data.free_text || '').length} / 160`;
-  document.getElementById('invoice-settings-note').classList.add('hidden');
-  document.getElementById('invoice-settings-modal').classList.remove('hidden');
-});
-
-document.getElementById('inv-free-text').addEventListener('input', function() {
-  document.getElementById('inv-free-text-count').textContent = `${this.value.length} / 160`;
-});
-
-document.getElementById('invoice-settings-cancel').addEventListener('click', () => {
-  document.getElementById('invoice-settings-modal').classList.add('hidden');
-});
-
-document.getElementById('invoice-settings-save').addEventListener('click', async () => {
-  const body = {
-    show_buyer_name: document.getElementById('inv-buyer-name').checked,
-    show_buyer_address: document.getElementById('inv-buyer-address').checked,
-    show_items: document.getElementById('inv-items').checked,
-    show_courier: document.getElementById('inv-courier').checked,
-    show_pickup_point: document.getElementById('inv-pickup-point').checked,
-    show_allegro_id: document.getElementById('inv-allegro-id').checked,
-    free_text: document.getElementById('inv-free-text').value,
-  };
-  await fetch(`${API}/print/invoice-settings`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const note = document.getElementById('invoice-settings-note');
-  note.textContent = '✓ Zapisano';
-  note.classList.remove('hidden');
-});
 
 document.getElementById('btn-seed').addEventListener('click', async () => {
   await fetch(`${API}/orders/dev/seed`, { method: 'POST' });

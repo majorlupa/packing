@@ -4,3 +4,6 @@ __pycache__/
 *.pyc
 *.pyo
 .DS_Store
+delivery.txt
+sadas.txt
+.claude/

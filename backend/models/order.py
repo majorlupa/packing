@@ -25,6 +25,7 @@ class Order(BaseModel):
     picking_list_id: Optional[str] = None
     courier: Optional[str] = None
     pickup_point: Optional[str] = None
+    tracking_number: Optional[str] = None
 
 
 class PickingList(BaseModel):
