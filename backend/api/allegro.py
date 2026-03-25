@@ -97,7 +97,11 @@ async def fetch_orders() -> List[Order]:
             buyer = form.get("buyer", {})
             delivery = form.get("delivery", {}).get("address", {})
             items = [
-                OrderItem(name=li["offer"]["name"], quantity=li["quantity"])
+                OrderItem(
+                    name=li["offer"]["name"],
+                    quantity=li["quantity"],
+                    unit_price=float(li["price"]["amount"]) if li.get("price") else None,
+                )
                 for li in form.get("lineItems", [])
             ]
             delivery_root = form.get("delivery", {})

@@ -10,6 +10,7 @@ let state = {
   packingIndex: 0,       // which card is shown
   packingDirection: null, // 'next' | 'prev' | null
   settingsTab: 'config',
+  customDocAvailable: false,
 };
 
 // ---- Fetch ----
@@ -366,6 +367,7 @@ function renderPackingCard(el) {
       <div class="pack-buttons">
         <button class="btn btn-label" id="btn-label">🖨 Etykieta kurierska</button>
         <button class="btn btn-invoice" id="btn-invoice">🖨 Dokument sprzedażowy</button>
+        ${state.customDocAvailable ? '<button class="btn btn-custom-doc" id="btn-custom-doc">🖨 Własny dokument</button>' : ''}
         <button class="btn btn-done" id="btn-done">✓ GOTOWE</button>
       </div>
     </div>
@@ -400,6 +402,11 @@ function renderPackingCard(el) {
   view.querySelector('#btn-invoice').addEventListener('click', () => {
     window.open(`${API}/print/orders/${order.id}/invoice`, '_blank');
   });
+  if (state.customDocAvailable) {
+    view.querySelector('#btn-custom-doc').addEventListener('click', () => {
+      window.open(`${API}/print/custom-doc`, '_blank');
+    });
+  }
   view.querySelector('#btn-done').addEventListener('click', async () => {
     if (!labelClicked) {
       const ok = confirm('Etykieta nie wydrukowana — czy na pewno chcesz oznaczyć jako gotowe?');
@@ -517,8 +524,12 @@ async function renderSettingsConfig(panel) {
 }
 
 async function renderSettingsDocuments(panel) {
-  const res  = await fetch(`${API}/print/invoice-settings`);
-  const data = await res.json();
+  const [invRes, docRes] = await Promise.all([
+    fetch(`${API}/print/invoice-settings`),
+    fetch(`${API}/print/custom-doc/info`),
+  ]);
+  const data = await invRes.json();
+  const docInfo = await docRes.json();
 
   panel.innerHTML = `
     <div class="settings-section">
@@ -527,6 +538,7 @@ async function renderSettingsDocuments(panel) {
         <label><input type="checkbox" id="inv-buyer-name"    ${(data.show_buyer_name    ?? true) ? 'checked' : ''}> Nazwa kupującego</label>
         <label><input type="checkbox" id="inv-buyer-address" ${(data.show_buyer_address ?? true) ? 'checked' : ''}> Adres kupującego</label>
         <label><input type="checkbox" id="inv-items"         ${(data.show_items         ?? true) ? 'checked' : ''}> Lista produktów</label>
+        <label><input type="checkbox" id="inv-price"         ${(data.show_price         ?? true) ? 'checked' : ''}> Cena za sztukę</label>
         <label><input type="checkbox" id="inv-courier"       ${(data.show_courier       ?? true) ? 'checked' : ''}> Kurier</label>
         <label><input type="checkbox" id="inv-pickup-point"  ${(data.show_pickup_point  ?? true) ? 'checked' : ''}> Punkt odbioru (paczkomat)</label>
         <label><input type="checkbox" id="inv-allegro-id"    ${(data.show_allegro_id    ?? true) ? 'checked' : ''}> Numer zamówienia Allegro</label>
@@ -541,6 +553,22 @@ async function renderSettingsDocuments(panel) {
         <button class="btn btn-primary" id="invoice-settings-save">Zapisz</button>
       </div>
     </div>
+
+    <div class="settings-section">
+      <p class="settings-desc">Własny dokument PDF — drukowany przyciskiem "Własny dokument" podczas pakowania.</p>
+      <div class="custom-doc-status ${docInfo.available ? 'available' : 'empty'}" id="custom-doc-status">
+        ${docInfo.available
+          ? `<span>✓ Dokument wgrany</span><button class="btn btn-secondary btn-sm" id="btn-doc-delete">Usuń</button>`
+          : `<span class="dim">Brak dokumentu</span>`
+        }
+      </div>
+      <div class="settings-field" style="margin-top:12px">
+        <input type="file" id="custom-doc-file" accept=".pdf" style="display:none">
+        <button class="btn btn-secondary" id="btn-doc-pick">${docInfo.available ? 'Zastąp plik' : 'Wybierz plik PDF'}</button>
+        <span id="custom-doc-filename" class="dim" style="margin-left:10px;font-size:13px"></span>
+      </div>
+      <p id="custom-doc-note" class="settings-note hidden"></p>
+    </div>
   `;
 
   panel.querySelector('#inv-free-text').addEventListener('input', function() {
@@ -552,6 +580,7 @@ async function renderSettingsDocuments(panel) {
       show_buyer_name:    panel.querySelector('#inv-buyer-name').checked,
       show_buyer_address: panel.querySelector('#inv-buyer-address').checked,
       show_items:         panel.querySelector('#inv-items').checked,
+      show_price:         panel.querySelector('#inv-price').checked,
       show_courier:       panel.querySelector('#inv-courier').checked,
       show_pickup_point:  panel.querySelector('#inv-pickup-point').checked,
       show_allegro_id:    panel.querySelector('#inv-allegro-id').checked,
@@ -566,12 +595,57 @@ async function renderSettingsDocuments(panel) {
     note.textContent = '✓ Zapisano';
     note.classList.remove('hidden');
   });
+
+  // Custom doc — file picker
+  const fileInput = panel.querySelector('#custom-doc-file');
+  panel.querySelector('#btn-doc-pick').addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', async () => {
+    const file = fileInput.files[0];
+    if (!file) return;
+    panel.querySelector('#custom-doc-filename').textContent = file.name;
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(`${API}/print/custom-doc`, { method: 'POST', body: form });
+    const note = panel.querySelector('#custom-doc-note');
+    if (res.ok) {
+      state.customDocAvailable = true;
+      note.textContent = '✓ Wgrano pomyślnie';
+      note.classList.remove('hidden');
+      panel.querySelector('#custom-doc-status').outerHTML =
+        `<div class="custom-doc-status available" id="custom-doc-status"><span>✓ Dokument wgrany</span><button class="btn btn-secondary btn-sm" id="btn-doc-delete">Usuń</button></div>`;
+      panel.querySelector('#btn-doc-pick').textContent = 'Zastąp plik';
+      attachDeleteHandler(panel);
+    } else {
+      const err = await res.json();
+      note.textContent = '✗ ' + (err.detail || 'Błąd');
+      note.classList.remove('hidden');
+    }
+  });
+
+  function attachDeleteHandler(p) {
+    const btn = p.querySelector('#btn-doc-delete');
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+      await fetch(`${API}/print/custom-doc`, { method: 'DELETE' });
+      state.customDocAvailable = false;
+      p.querySelector('#custom-doc-status').outerHTML =
+        `<div class="custom-doc-status empty" id="custom-doc-status"><span class="dim">Brak dokumentu</span></div>`;
+      p.querySelector('#btn-doc-pick').textContent = 'Wybierz plik PDF';
+      p.querySelector('#custom-doc-filename').textContent = '';
+      attachDeleteHandler(p);
+    });
+  }
+  attachDeleteHandler(panel);
 }
 
-function renderSettingsArchive(panel) {
+async function renderSettingsArchive(panel) {
+  const res = await fetch(`${API}/orders/archive`);
+  const ids = await res.json();
+
   panel.innerHTML = `
     <div class="settings-section">
-      <p class="settings-desc">Archiwum zamówień — wkrótce.</p>
+      <p class="settings-desc">${ids.length ? `${ids.length} zarchiwizowanych zamówień.` : 'Archiwum jest puste.'}</p>
+      ${ids.length ? `<div class="archive-list">${ids.map(id => `<div class="archive-item">${id}</div>`).join('')}</div>` : ''}
     </div>
   `;
 }
@@ -584,7 +658,7 @@ document.querySelectorAll('.queue-item').forEach(el => {
 
 document.getElementById('btn-settings').addEventListener('click', () => renderQueue('settings'));
 
-document.getElementById('btn-zakoncz').addEventListener('click', () => {
+document.getElementById('btn-zakoncz').addEventListener('click', async () => {
   const doneOrders = state.orders.filter(o => o.status === 'done');
   if (!doneOrders.length) {
     alert('Brak zamówień w Gotowe.');
@@ -595,7 +669,9 @@ document.getElementById('btn-zakoncz').addEventListener('click', () => {
     const ok = confirm(`${missing.length} ${missing.length === 1 ? 'zamówienie nie ma' : 'zamówień nie ma'} numeru śledzenia. Czy na pewno chcesz zakończyć dzień?`);
     if (!ok) return;
   }
-  alert('Funkcja archiwizacji wkrótce.');
+  await fetch(`${API}/orders/zakoncz-dzien`, { method: 'POST' });
+  await fetchAll();
+  if (state.currentQueue === 'settings') renderQueue('settings');
 });
 
 document.getElementById('btn-sync').addEventListener('click', async () => {
@@ -636,9 +712,20 @@ async function checkAuthStatus() {
   } catch {}
 }
 
+// ---- Custom doc availability ----
+
+async function checkCustomDoc() {
+  try {
+    const res = await fetch(`${API}/print/custom-doc/info`);
+    const data = await res.json();
+    state.customDocAvailable = data.available;
+  } catch {}
+}
+
 // ---- Boot ----
 fetchAll();
 checkAuthStatus();
+checkCustomDoc();
 
 // Check every 30s in case user just came back from Allegro auth page
 setInterval(checkAuthStatus, 30000);

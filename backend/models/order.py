@@ -13,6 +13,7 @@ class OrderStatus(str, Enum):
 class OrderItem(BaseModel):
     name: str
     quantity: int
+    unit_price: Optional[float] = None
 
 
 class Order(BaseModel):

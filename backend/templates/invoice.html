@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<title>Dokument sprzedażowy</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    font-size: 13px;
+    color: #1a1a1a;
+    background: #fff;
+    padding: 36px 44px;
+    max-width: 700px;
+  }
+
+  .doc-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    padding-bottom: 14px;
+    border-bottom: 2px solid #1a1a1a;
+    margin-bottom: 28px;
+  }
+  .doc-title {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+  }
+  .doc-date {
+    font-size: 12px;
+    color: #777;
+  }
+
+  .info-block {
+    margin-bottom: 28px;
+  }
+  .info-row {
+    display: flex;
+    padding: 7px 0;
+    border-bottom: 1px solid #f0f0f0;
+  }
+  .info-row:last-child { border-bottom: none; }
+  .info-label {
+    width: 150px;
+    flex-shrink: 0;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #999;
+    padding-top: 1px;
+  }
+  .info-value {
+    flex: 1;
+    font-weight: 500;
+    line-height: 1.5;
+  }
+  .info-value.bold { font-weight: 700; }
+
+  .items-heading {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #999;
+    margin-bottom: 8px;
+  }
+  table.items {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 28px;
+  }
+  table.items thead th {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #999;
+    font-weight: 600;
+    text-align: left;
+    padding: 6px 10px;
+    border-bottom: 1px solid #ddd;
+  }
+  table.items thead th.qty { text-align: right; width: 50px; }
+  table.items thead th.price { text-align: right; width: 90px; }
+  table.items tbody tr:nth-child(even) { background: #fafafa; }
+  table.items tbody td {
+    padding: 8px 10px;
+    line-height: 1.4;
+    border-bottom: 1px solid #f0f0f0;
+  }
+  table.items tbody td.qty { text-align: right; font-weight: 600; color: #555; }
+  table.items tbody td.price { text-align: right; color: #444; }
+  table.items tfoot td {
+    padding: 10px 10px 6px;
+    text-align: right;
+    font-weight: 700;
+    font-size: 14px;
+    border-top: 2px solid #ddd;
+  }
+  table.items tfoot td.total-label { text-align: left; color: #888; font-weight: 400; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+  .free-text {
+    padding: 12px 16px;
+    background: #f7f7f7;
+    border-left: 3px solid #ddd;
+    font-size: 12px;
+    color: #555;
+    line-height: 1.6;
+  }
+
+  @media print {
+    body { padding: 0; }
+    @page { margin: 18mm 20mm; }
+  }
+</style>
+</head>
+<body>
+
+<div class="doc-header">
+  <div class="doc-title">Dokument sprzedażowy</div>
+  <div class="doc-date">{{ date }}</div>
+</div>
+
+{% if rows %}
+<div class="info-block">
+  {% for label, value, bold in rows %}
+  <div class="info-row">
+    <div class="info-label">{{ label }}</div>
+    <div class="info-value{% if bold %} bold{% endif %}">{{ value }}</div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if items %}
+<div class="items-heading">Zamówione produkty</div>
+<table class="items">
+  <thead>
+    <tr>
+      <th>Produkt</th>
+      <th class="qty">Ilość</th>
+      {% if show_price %}<th class="price">Cena jedn.</th><th class="price">Wartość</th>{% endif %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for item in items %}
+    <tr>
+      <td>{{ item.name }}</td>
+      <td class="qty">{{ item.quantity }}</td>
+      {% if show_price %}
+        <td class="price">{% if item.unit_price is not none %}{{ "%.2f"|format(item.unit_price) }} zł{% else %}—{% endif %}</td>
+        <td class="price">{% if item.unit_price is not none %}{{ "%.2f"|format(item.unit_price * item.quantity) }} zł{% else %}—{% endif %}</td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+  </tbody>
+  {% if show_price and total is not none %}
+  <tfoot>
+    <tr>
+      <td class="total-label" colspan="{% if show_price %}3{% else %}1{% endif %}">Razem</td>
+      <td>{{ "%.2f"|format(total) }} zł</td>
+    </tr>
+  </tfoot>
+  {% endif %}
+</table>
+{% endif %}
+
+{% if free_text %}
+<div class="free-text">{{ free_text }}</div>
+{% endif %}
+
+<script>window.onload = () => window.print();</script>
+</body>
+</html>

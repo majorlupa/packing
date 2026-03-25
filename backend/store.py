@@ -14,6 +14,7 @@ DEFAULT_INVOICE_SETTINGS = {
     "show_buyer_name": True,
     "show_buyer_address": True,
     "show_items": True,
+    "show_price": True,
     "show_courier": True,
     "show_pickup_point": True,
     "show_allegro_id": True,
@@ -23,12 +24,14 @@ DEFAULT_INVOICE_SETTINGS = {
 
 def _load() -> dict:
     if not os.path.exists(DATA_FILE):
-        return {"orders": {}, "picking_lists": {}, "picking_list_counter": 0, "invoice_settings": DEFAULT_INVOICE_SETTINGS.copy()}
+        return {"orders": {}, "picking_lists": {}, "picking_list_counter": 0, "invoice_settings": DEFAULT_INVOICE_SETTINGS.copy(), "archive": []}
     state = json.load(open(DATA_FILE))
     if "picking_list_counter" not in state:
         state["picking_list_counter"] = 0
     if "invoice_settings" not in state:
         state["invoice_settings"] = DEFAULT_INVOICE_SETTINGS.copy()
+    if "archive" not in state:
+        state["archive"] = []
     return state
 
 
@@ -73,8 +76,29 @@ def delete_picking_list(pl_id: str):
     _save(state)
 
 
+def get_archive() -> list:
+    return _load()["archive"]
+
+
+def archive_done_orders() -> int:
+    """Move all done orders to archive tombstones. Returns count archived."""
+    state = _load()
+    done_ids = [
+        data["allegro_id"]
+        for data in state["orders"].values()
+        if data.get("status") == "done"
+    ]
+    if not done_ids:
+        return 0
+    existing = set(state["archive"])
+    state["archive"].extend(aid for aid in done_ids if aid not in existing)
+    state["orders"] = {k: v for k, v in state["orders"].items() if v.get("status") != "done"}
+    _save(state)
+    return len(done_ids)
+
+
 def get_invoice_settings() -> dict:
-    return _load()["invoice_settings"]
+    return {**DEFAULT_INVOICE_SETTINGS, **_load()["invoice_settings"]}
 
 
 def save_invoice_settings(settings: dict):

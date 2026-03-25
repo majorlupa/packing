@@ -39,14 +39,27 @@ async def sync_from_allegro():
 
     existing = store.get_orders()
     existing_allegro_ids = {o.allegro_id for o in existing.values()}
+    archived_allegro_ids = set(store.get_archive())
 
     added = 0
     for order in new_orders:
-        if order.allegro_id not in existing_allegro_ids:
+        if order.allegro_id not in existing_allegro_ids and order.allegro_id not in archived_allegro_ids:
             store.save_order(order)
             added += 1
 
     return {"added": added, "total": len(store.get_orders())}
+
+
+@router.post("/zakoncz-dzien")
+async def zakoncz_dzien():
+    """Archive all done orders (tombstone their allegro_ids) and remove them from state."""
+    archived = store.archive_done_orders()
+    return {"archived": archived}
+
+
+@router.get("/archive")
+async def get_archive():
+    return store.get_archive()
 
 
 # --- Allegro OAuth2 authorization code flow ---
@@ -58,15 +71,15 @@ async def seed_test_orders():
     from models.order import OrderItem
     test_orders = [
         {"buyer_name": "Jan Kowalski", "buyer_address": "ul. Piotrkowska 1, 90-001 Łódź",
-         "items": [{"name": "Klocki Lego City 60388", "quantity": 1}]},
+         "items": [{"name": "Klocki Lego City 60388", "quantity": 1, "unit_price": 129.99}]},
         {"buyer_name": "Anna Nowak", "buyer_address": "ul. Brzezińska 12, 92-103 Łódź",
-         "items": [{"name": "Klocki Lego City 60388", "quantity": 1}]},
+         "items": [{"name": "Klocki Lego City 60388", "quantity": 1, "unit_price": 129.99}]},
         {"buyer_name": "Piotr Wiśniewski", "buyer_address": "ul. Zgierska 45, 91-001 Łódź",
-         "items": [{"name": "Lalka Baby Born 43cm", "quantity": 1}, {"name": "Ubranko Baby Born", "quantity": 2}]},
+         "items": [{"name": "Lalka Baby Born 43cm", "quantity": 1, "unit_price": 219.00}, {"name": "Ubranko Baby Born", "quantity": 2, "unit_price": 49.99}]},
         {"buyer_name": "Maria Wójcik", "buyer_address": "ul. Kilińskiego 8, 90-002 Łódź",
-         "items": [{"name": "Lalka Baby Born 43cm", "quantity": 1}]},
+         "items": [{"name": "Lalka Baby Born 43cm", "quantity": 1, "unit_price": 219.00}]},
         {"buyer_name": "Tomasz Kamiński", "buyer_address": "ul. Narutowicza 22, 90-135 Łódź",
-         "items": [{"name": "Puzzle 1000 el. Krajobraz", "quantity": 1}]},
+         "items": [{"name": "Puzzle 1000 el. Krajobraz", "quantity": 1, "unit_price": 64.90}]},
     ]
     from models.order import Order, OrderStatus
     added = 0
