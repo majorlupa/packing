@@ -10,9 +10,10 @@ Streamlines the packing workflow: pulling Allegro orders, generating courier lab
 
 - **Backend:** Python FastAPI
 - **Frontend:** Simple HTML/JS
-- **Infrastructure:** Docker + docker-compose (part of `/home/tomek/exodia/docker-compose.yaml`)
+- **Infrastructure:** Docker + docker-compose (`docker-compose.yaml` in project root)
   - Services: `packing-backend`, `packing-frontend` (port 3001)
   - Run without sudo — tomek is in docker group (needs re-login)
+  - Always rebuild both images after changes: `docker compose build packing-backend packing-frontend && docker compose up -d`
 - **State:** persisted in `/home/tomek/Projects/packing/data/state.json`
 - **Secrets:** `.env` file, never committed
 
@@ -44,7 +45,6 @@ All of them (InPost paczkomat, InPost kurier, DPD, DHL, etc.). Labels are create
 
 - Allegro sandbox connected, two test sales created
 - Label endpoint uses Allegro Shipment Management API (v2 Accept header)
-- Docker compose moved to project folder (`docker-compose.yaml`), removed from exodia
 - Project on GitHub: https://github.com/majorlupa/packing
 
 ## UI features implemented
@@ -52,21 +52,28 @@ All of them (InPost paczkomat, InPost kurier, DPD, DHL, etc.). Labels are create
 - **Carousel transitions** — slide in/out on prev/next, green flash on GOTOWE
 - **Label guard** — GOTOWE warns if label not printed yet
 - **Allegro ID** on packing cards and done list, with copy button
-- **Settings panel** — sidebar nav item, tabbed: Konfiguracja / Dokumenty / Archiwum (placeholder)
-- **Zakończ dzień** button — checks for missing tracking numbers, warns if any
+- **Settings panel** — sidebar nav item, tabbed: Konfiguracja / Dokumenty / Archiwum
+- **Zakończ dzień** button — warns if any done orders missing tracking number, then archives all done orders
 - **Gotowe** shows tracking number instead of items (`tracking_number` field on Order model, nullable)
+- **Dokument sprzedażowy** — Jinja2 template (`backend/templates/invoice.html`), configurable fields via checkboxes, per-item price columns + grand total, free text field
+- **Własny dokument** — upload a static PDF in Ustawienia → Dokumenty; button appears in Pakowanie only when a file is uploaded
+- **Archiwum** — tombstone system: Zakończ dzień stores allegro_ids in `state.archive`; sync skips archived ids
 
 ## Architecture notes
 
-- `Order.tracking_number` — nullable field, populated when Allegro shipment tracking is implemented
-- Archive/tombstone system planned but not yet built (Archiwum tab is placeholder)
+- `Order.tracking_number` — nullable, populated when Allegro shipment tracking sync is implemented
+- `OrderItem.unit_price` — nullable float, pulled from Allegro `lineItems[].price.amount` on sync
+- `state.archive` — flat list of allegro_id strings (tombstones); new keys in invoice_settings are merged from defaults so old state.json stays compatible
+- Custom PDF stored at `/app/data/custom_doc.pdf` (inside container, backed by data volume)
 - Sync filter for already-shipped orders (via Allegro label status) — designed, not yet implemented
 
-## Next steps
+## Next steps (tomorrow)
 
+- Better looking buttons in Pakowanie
+- App gets a name
+- Keep working on Dokument sprzedażowy
 - Implement tracking number sync from Allegro shipment management API
-- Build archive (tombstone) system + "Zakończ dzień" persistence
-- Sync filter: skip orders with label number already set on Allegro
+- Sync filter: skip orders with label already set on Allegro
 - Test with real Zebra + A4 in production
 - Connect production Allegro account
 
