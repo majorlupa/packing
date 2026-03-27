@@ -686,11 +686,6 @@ document.getElementById('btn-auth').addEventListener('click', async () => {
 });
 
 
-document.getElementById('btn-seed').addEventListener('click', async () => {
-  await fetch(`${API}/orders/dev/seed`, { method: 'POST' });
-  await fetchAll();
-});
-
 // ---- Auto-refresh pending every 60s ----
 setInterval(() => {
   if (state.currentQueue === 'pending') fetchAll();

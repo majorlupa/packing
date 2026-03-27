@@ -64,38 +64,6 @@ async def get_archive():
 
 # --- Allegro OAuth2 authorization code flow ---
 
-@router.post("/dev/seed")
-async def seed_test_orders():
-    """Add fake orders for testing the workflow."""
-    import uuid
-    from models.order import OrderItem
-    test_orders = [
-        {"buyer_name": "Jan Kowalski", "buyer_address": "ul. Piotrkowska 1, 90-001 Łódź",
-         "items": [{"name": "Klocki Lego City 60388", "quantity": 1, "unit_price": 129.99}]},
-        {"buyer_name": "Anna Nowak", "buyer_address": "ul. Brzezińska 12, 92-103 Łódź",
-         "items": [{"name": "Klocki Lego City 60388", "quantity": 1, "unit_price": 129.99}]},
-        {"buyer_name": "Piotr Wiśniewski", "buyer_address": "ul. Zgierska 45, 91-001 Łódź",
-         "items": [{"name": "Lalka Baby Born 43cm", "quantity": 1, "unit_price": 219.00}, {"name": "Ubranko Baby Born", "quantity": 2, "unit_price": 49.99}]},
-        {"buyer_name": "Maria Wójcik", "buyer_address": "ul. Kilińskiego 8, 90-002 Łódź",
-         "items": [{"name": "Lalka Baby Born 43cm", "quantity": 1, "unit_price": 219.00}]},
-        {"buyer_name": "Tomasz Kamiński", "buyer_address": "ul. Narutowicza 22, 90-135 Łódź",
-         "items": [{"name": "Puzzle 1000 el. Krajobraz", "quantity": 1, "unit_price": 64.90}]},
-    ]
-    from models.order import Order, OrderStatus
-    added = 0
-    for o in test_orders:
-        order = Order(
-            id=str(uuid.uuid4()),
-            allegro_id=f"TEST-{uuid.uuid4().hex[:8].upper()}",
-            buyer_name=o["buyer_name"],
-            buyer_address=o["buyer_address"],
-            items=[OrderItem(**i) for i in o["items"]],
-            status=OrderStatus.pending,
-        )
-        store.save_order(order)
-        added += 1
-    return {"added": added}
-
 
 @router.get("/auth/status")
 async def auth_status():
