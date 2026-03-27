@@ -27,6 +27,17 @@ class Order(BaseModel):
     courier: Optional[str] = None
     pickup_point: Optional[str] = None
     tracking_number: Optional[str] = None
+    # Structured buyer address for shipment creation
+    buyer_email: Optional[str] = None
+    buyer_phone: Optional[str] = None
+    buyer_street: Optional[str] = None
+    buyer_postal_code: Optional[str] = None
+    buyer_city: Optional[str] = None
+    buyer_country: Optional[str] = "PL"
+    # Allegro delivery method UUID (from order)
+    delivery_method_id: Optional[str] = None
+    # Shipment management UUID (set after creating shipment via API)
+    shipment_id: Optional[str] = None
 
 
 class PickingList(BaseModel):

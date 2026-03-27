@@ -10,6 +10,28 @@ from models.order import Order, PickingList
 DATA_FILE = "/app/data/state.json"
 
 
+DEFAULT_SHIPMENT_SETTINGS = {
+    "sender": {
+        "name": "",
+        "company": "",
+        "street": "",
+        "postal_code": "",
+        "city": "",
+        "country_code": "PL",
+        "email": "",
+        "phone": "",
+    },
+    "package": {
+        "type": "PACKAGE",
+        "length": 30,
+        "width": 20,
+        "height": 15,
+        "weight": 1.0,
+        "label_format": "PDF",
+        "page_size": "A6",
+    },
+}
+
 DEFAULT_INVOICE_SETTINGS = {
     "show_buyer_name": True,
     "show_buyer_address": True,
@@ -24,12 +46,14 @@ DEFAULT_INVOICE_SETTINGS = {
 
 def _load() -> dict:
     if not os.path.exists(DATA_FILE):
-        return {"orders": {}, "picking_lists": {}, "picking_list_counter": 0, "invoice_settings": DEFAULT_INVOICE_SETTINGS.copy(), "archive": []}
+        return {"orders": {}, "picking_lists": {}, "picking_list_counter": 0, "invoice_settings": DEFAULT_INVOICE_SETTINGS.copy(), "shipment_settings": DEFAULT_SHIPMENT_SETTINGS.copy(), "archive": []}
     state = json.load(open(DATA_FILE))
     if "picking_list_counter" not in state:
         state["picking_list_counter"] = 0
     if "invoice_settings" not in state:
         state["invoice_settings"] = DEFAULT_INVOICE_SETTINGS.copy()
+    if "shipment_settings" not in state:
+        state["shipment_settings"] = DEFAULT_SHIPMENT_SETTINGS.copy()
     if "archive" not in state:
         state["archive"] = []
     return state
@@ -104,4 +128,18 @@ def get_invoice_settings() -> dict:
 def save_invoice_settings(settings: dict):
     state = _load()
     state["invoice_settings"] = settings
+    _save(state)
+
+
+def get_shipment_settings() -> dict:
+    saved = _load().get("shipment_settings", {})
+    return {
+        "sender": {**DEFAULT_SHIPMENT_SETTINGS["sender"], **saved.get("sender", {})},
+        "package": {**DEFAULT_SHIPMENT_SETTINGS["package"], **saved.get("package", {})},
+    }
+
+
+def save_shipment_settings(settings: dict):
+    state = _load()
+    state["shipment_settings"] = settings
     _save(state)

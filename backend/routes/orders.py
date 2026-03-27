@@ -42,12 +42,27 @@ async def sync_from_allegro():
     archived_allegro_ids = set(store.get_archive())
 
     added = 0
+    updated = 0
+    allegro_map = {o.allegro_id: o for o in new_orders}
     for order in new_orders:
-        if order.allegro_id not in existing_allegro_ids and order.allegro_id not in archived_allegro_ids:
+        if order.allegro_id in archived_allegro_ids:
+            continue
+        if order.allegro_id not in existing_allegro_ids:
             store.save_order(order)
             added += 1
+        else:
+            # Backfill fields added after initial sync
+            existing_order = next(o for o in existing.values() if o.allegro_id == order.allegro_id)
+            dirty = False
+            for field in ("delivery_method_id", "buyer_email", "buyer_phone", "buyer_street", "buyer_postal_code", "buyer_city", "buyer_country"):
+                if getattr(existing_order, field, None) is None and getattr(order, field, None) is not None:
+                    setattr(existing_order, field, getattr(order, field))
+                    dirty = True
+            if dirty:
+                store.save_order(existing_order)
+                updated += 1
 
-    return {"added": added, "total": len(store.get_orders())}
+    return {"added": added, "updated": updated, "total": len(store.get_orders())}
 
 
 @router.post("/zakoncz-dzien")

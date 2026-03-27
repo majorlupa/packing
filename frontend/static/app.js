@@ -364,6 +364,14 @@ function renderPackingCard(el) {
         <button class="btn-copy" title="Kopiuj ID" onclick="navigator.clipboard.writeText('${order.allegro_id}').then(()=>{this.textContent='✓';setTimeout(()=>this.textContent='⧉',1200)})">⧉</button>
       </div>
       <div class="items">${order.items.map(i => `${i.quantity}x ${i.name}`).join('<br/>')}</div>
+      <div class="pack-dims">
+        <label>Wymiary (cm)</label>
+        <input type="number" class="dim-input" id="dim-l" value="30" min="1"> ×
+        <input type="number" class="dim-input" id="dim-w" value="20" min="1"> ×
+        <input type="number" class="dim-input" id="dim-h" value="40" min="1">
+        <label style="margin-left:12px">Waga (kg)</label>
+        <input type="number" class="dim-input" id="dim-wt" value="1.0" min="0.1" step="0.1">
+      </div>
       <div class="pack-buttons">
         <button class="btn btn-label" id="btn-label">🖨 Etykieta kurierska</button>
         <button class="btn btn-invoice" id="btn-invoice">🖨 Dokument</button>
@@ -396,7 +404,11 @@ function renderPackingCard(el) {
     labelClicked = true;
     view.querySelector('#btn-label').classList.add('printed');
     view.querySelector('#btn-label').textContent = '✓ Etykieta kurierska';
-    window.open(`${API}/print/orders/${order.id}/label`, '_blank');
+    const l  = view.querySelector('#dim-l').value;
+    const w  = view.querySelector('#dim-w').value;
+    const h  = view.querySelector('#dim-h').value;
+    const wt = view.querySelector('#dim-wt').value;
+    window.open(`${API}/print/orders/${order.id}/label?length=${l}&width=${w}&height=${h}&weight=${wt}`, '_blank');
   });
   view.querySelector('#btn-invoice').addEventListener('click', () => {
     window.open(`${API}/print/orders/${order.id}/combined`, '_blank');
@@ -470,6 +482,7 @@ function renderSettings(el) {
     <div class="settings-tabs">
       <button class="settings-tab ${activeTab === 'config'    ? 'active' : ''}" data-tab="config">Konfiguracja</button>
       <button class="settings-tab ${activeTab === 'documents' ? 'active' : ''}" data-tab="documents">Dokumenty</button>
+      <button class="settings-tab ${activeTab === 'shipping'  ? 'active' : ''}" data-tab="shipping">Wysyłka</button>
       <button class="settings-tab ${activeTab === 'archive'   ? 'active' : ''}" data-tab="archive">Archiwum</button>
     </div>
     <div id="settings-panel"></div>
@@ -485,7 +498,57 @@ function renderSettings(el) {
   const panel = el.querySelector('#settings-panel');
   if (activeTab === 'config')    renderSettingsConfig(panel);
   if (activeTab === 'documents') renderSettingsDocuments(panel);
+  if (activeTab === 'shipping')  renderSettingsShipping(panel);
   if (activeTab === 'archive')   renderSettingsArchive(panel);
+}
+
+async function renderSettingsShipping(panel) {
+  const res = await fetch(`${API}/print/shipment-settings`);
+  const s = await res.json();
+  const sender = s.sender || {};
+  const pkg = s.package || {};
+
+  panel.innerHTML = `
+    <div class="settings-section">
+      <p class="settings-desc"><strong>Dane nadawcy</strong></p>
+      <div class="settings-field"><label>Imię i nazwisko</label><input type="text" id="sh-name" value="${sender.name || ''}"></div>
+      <div class="settings-field"><label>Firma</label><input type="text" id="sh-company" value="${sender.company || ''}"></div>
+      <div class="settings-field"><label>Ulica i numer</label><input type="text" id="sh-street" value="${sender.street || ''}"></div>
+      <div class="settings-field"><label>Kod pocztowy</label><input type="text" id="sh-postal" value="${sender.postal_code || ''}"></div>
+      <div class="settings-field"><label>Miasto</label><input type="text" id="sh-city" value="${sender.city || ''}"></div>
+      <div class="settings-field"><label>E-mail</label><input type="email" id="sh-email" value="${sender.email || ''}"></div>
+      <div class="settings-field"><label>Telefon</label><input type="text" id="sh-phone" value="${sender.phone || ''}"></div>
+    </div>
+    <p id="shipping-note" class="settings-note hidden"></p>
+    <div class="settings-actions">
+      <button class="btn btn-primary" id="shipping-save">Zapisz</button>
+    </div>
+  `;
+
+  panel.querySelector('#shipping-save').addEventListener('click', async () => {
+    const body = {
+      sender: {
+        name:         panel.querySelector('#sh-name').value.trim(),
+        company:      panel.querySelector('#sh-company').value.trim(),
+        street:       panel.querySelector('#sh-street').value.trim(),
+        postal_code:  panel.querySelector('#sh-postal').value.trim(),
+        city:         panel.querySelector('#sh-city').value.trim(),
+        country_code: 'PL',
+        email:        panel.querySelector('#sh-email').value.trim(),
+        phone:        panel.querySelector('#sh-phone').value.trim(),
+      },
+      package: { type: 'PACKAGE', label_format: 'PDF', page_size: 'A6' },
+    };
+    await fetch(`${API}/print/shipment-settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const note = panel.querySelector('#shipping-note');
+    note.textContent = '✓ Zapisano';
+    note.classList.remove('hidden');
+    setTimeout(() => note.classList.add('hidden'), 3000);
+  });
 }
 
 async function renderSettingsConfig(panel) {
@@ -653,6 +716,7 @@ document.querySelectorAll('.queue-item').forEach(el => {
 document.getElementById('btn-settings').addEventListener('click', () => renderQueue('settings'));
 
 document.getElementById('btn-zakoncz').addEventListener('click', async () => {
+  if (!confirm('Zakończyć dzień i zarchiwizować wszystkie zamówienia z Gotowe?')) return;
   const doneOrders = state.orders.filter(o => o.status === 'done');
   if (!doneOrders.length) {
     alert('Brak zamówień w Gotowe.');

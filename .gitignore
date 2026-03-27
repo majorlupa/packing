@@ -9,3 +9,5 @@ sadas.txt
 .claude/
 docker-compose.yaml
 CLAUDE.md
+api.md
+shipment.md

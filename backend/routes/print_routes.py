@@ -84,16 +84,36 @@ def save_invoice_settings(body: InvoiceSettings):
     return {"status": "saved"}
 
 
+@router.get("/shipment-settings")
+def get_shipment_settings():
+    return store.get_shipment_settings()
+
+
+@router.post("/shipment-settings")
+def save_shipment_settings(body: dict):
+    store.save_shipment_settings(body)
+    return {"status": "saved"}
+
+
 @router.get("/orders/{order_id}/label")
-async def print_label(order_id: str):
-    """Fetch courier label PDF from Allegro shipment management."""
+async def print_label(
+    order_id: str,
+    length: float = 30, width: float = 20, height: float = 40, weight: float = 1.0,
+):
+    """Create shipment (if needed) and return label PDF."""
     orders = store.get_orders()
     if order_id not in orders:
         raise HTTPException(status_code=404, detail="Order not found.")
     order = orders[order_id]
 
     try:
-        label_bytes = await allegro.get_label_for_order(order.allegro_id)
+        if not order.shipment_id:
+            settings = store.get_shipment_settings()
+            package = {**settings["package"], "length": length, "width": width, "height": height, "weight": weight}
+            shipment_id = await allegro.create_shipment(order, settings["sender"], package)
+            order.shipment_id = shipment_id
+            store.save_order(order)
+        label_bytes = await allegro.download_label(order.shipment_id)
     except RuntimeError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

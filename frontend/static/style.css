@@ -36,6 +36,14 @@ body {
   flex-shrink: 0;
 }
 
+#app-name {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+  margin: 0 0 8px 0;
+}
+
 #sidebar h2 {
   font-size: 13px;
   text-transform: uppercase;
@@ -208,6 +216,26 @@ body {
 .pack-card .buyer { font-size: 20px; font-weight: 700; }
 .pack-card .address { color: var(--text-dim); margin: 6px 0 8px; }
 .pack-card .items { font-size: 14px; line-height: 1.8; }
+
+.pack-dims {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.dim-input {
+  width: 56px;
+  padding: 4px 6px;
+  background: var(--bg);
+  border: 1px solid #444;
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 13px;
+  text-align: center;
+}
 
 .pack-buttons {
   display: flex;
