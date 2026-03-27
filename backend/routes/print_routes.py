@@ -3,7 +3,9 @@ Print routes — return PDF/HTML content for the browser to trigger printing.
 Zebra label: PDF fetched from Allegro shipment management API.
 Sales document: HTML rendered via Jinja2 template, browser prints.
 Custom doc: user-uploaded static PDF, served as-is.
+Combined: invoice rendered to PDF via weasyprint, merged with custom doc via pypdf.
 """
+import io
 import os
 import shutil
 from datetime import date
@@ -22,6 +24,42 @@ TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "..", "templates")
 _jinja = Environment(loader=FileSystemLoader(TEMPLATES_DIR), autoescape=True)
 
 CUSTOM_DOC_PATH = "/app/data/custom_doc.pdf"
+
+
+def _build_invoice_html(order_id: str) -> str:
+    orders = store.get_orders()
+    if order_id not in orders:
+        raise HTTPException(status_code=404, detail="Order not found.")
+    order = orders[order_id]
+    s = store.get_invoice_settings()
+
+    rows = []
+    if s.get("show_buyer_name") and order.buyer_name:
+        rows.append(("Kupujący", order.buyer_name, True))
+    if s.get("show_buyer_address") and order.buyer_address:
+        rows.append(("Adres", order.buyer_address.replace("\n", "<br>"), False))
+    if s.get("show_courier") and order.courier:
+        rows.append(("Kurier", order.courier, False))
+    if s.get("show_pickup_point") and order.pickup_point:
+        rows.append(("Punkt odbioru", order.pickup_point, True))
+    if s.get("show_allegro_id"):
+        rows.append(("Nr zamówienia", order.allegro_id, False))
+
+    show_price = s.get("show_price") and s.get("show_items")
+    items = order.items if s.get("show_items") else []
+    total = None
+    if show_price and items and all(i.unit_price is not None for i in items):
+        total = sum(i.unit_price * i.quantity for i in items)
+
+    template = _jinja.get_template("invoice.html")
+    return template.render(
+        date=date.today().strftime("%-d.%-m.%Y"),
+        rows=rows,
+        items=items,
+        show_price=show_price,
+        total=total,
+        free_text=s.get("free_text", ""),
+    )
 
 
 class InvoiceSettings(BaseModel):
@@ -65,41 +103,31 @@ async def print_label(order_id: str):
 @router.get("/orders/{order_id}/invoice")
 async def print_invoice(order_id: str):
     """Return a sales document HTML — browser opens it and auto-prints."""
-    orders = store.get_orders()
-    if order_id not in orders:
-        raise HTTPException(status_code=404, detail="Order not found.")
-    order = orders[order_id]
-    s = store.get_invoice_settings()
-
-    rows = []
-    if s.get("show_buyer_name") and order.buyer_name:
-        rows.append(("Kupujący", order.buyer_name, True))
-    if s.get("show_buyer_address") and order.buyer_address:
-        rows.append(("Adres", order.buyer_address.replace("\n", "<br>"), False))
-    if s.get("show_courier") and order.courier:
-        rows.append(("Kurier", order.courier, False))
-    if s.get("show_pickup_point") and order.pickup_point:
-        rows.append(("Punkt odbioru", order.pickup_point, True))
-    if s.get("show_allegro_id"):
-        rows.append(("Nr zamówienia", order.allegro_id, False))
-
-    show_price = s.get("show_price") and s.get("show_items")
-    items = order.items if s.get("show_items") else []
-    total = None
-    if show_price and items and all(i.unit_price is not None for i in items):
-        total = sum(i.unit_price * i.quantity for i in items)
-
-    template = _jinja.get_template("invoice.html")
-    html = template.render(
-        date=date.today().strftime("%-d.%-m.%Y"),
-        rows=rows,
-        items=items,
-        show_price=show_price,
-        total=total,
-        free_text=s.get("free_text", ""),
-    )
-
+    html = _build_invoice_html(order_id)
     return Response(content=html, media_type="text/html")
+
+
+@router.get("/orders/{order_id}/combined")
+async def print_combined(order_id: str):
+    """Invoice + custom doc merged into one PDF."""
+    import weasyprint
+    from pypdf import PdfWriter, PdfReader
+
+    html = _build_invoice_html(order_id)
+    invoice_pdf = weasyprint.HTML(string=html).write_pdf()
+
+    if not os.path.exists(CUSTOM_DOC_PATH):
+        return Response(content=invoice_pdf, media_type="application/pdf")
+
+    writer = PdfWriter()
+    for page in PdfReader(io.BytesIO(invoice_pdf)).pages:
+        writer.add_page(page)
+    for page in PdfReader(CUSTOM_DOC_PATH).pages:
+        writer.add_page(page)
+
+    out = io.BytesIO()
+    writer.write(out)
+    return Response(content=out.getvalue(), media_type="application/pdf")
 
 
 # ---- Custom document ----

@@ -366,8 +366,7 @@ function renderPackingCard(el) {
       <div class="items">${order.items.map(i => `${i.quantity}x ${i.name}`).join('<br/>')}</div>
       <div class="pack-buttons">
         <button class="btn btn-label" id="btn-label">🖨 Etykieta kurierska</button>
-        <button class="btn btn-invoice" id="btn-invoice">🖨 Dokument sprzedażowy</button>
-        ${state.customDocAvailable ? '<button class="btn btn-custom-doc" id="btn-custom-doc">🖨 Własny dokument</button>' : ''}
+        <button class="btn btn-invoice" id="btn-invoice">🖨 Dokument</button>
         <button class="btn btn-done" id="btn-done">✓ GOTOWE</button>
       </div>
     </div>
@@ -400,13 +399,8 @@ function renderPackingCard(el) {
     window.open(`${API}/print/orders/${order.id}/label`, '_blank');
   });
   view.querySelector('#btn-invoice').addEventListener('click', () => {
-    window.open(`${API}/print/orders/${order.id}/invoice`, '_blank');
+    window.open(`${API}/print/orders/${order.id}/combined`, '_blank');
   });
-  if (state.customDocAvailable) {
-    view.querySelector('#btn-custom-doc').addEventListener('click', () => {
-      window.open(`${API}/print/custom-doc`, '_blank');
-    });
-  }
   view.querySelector('#btn-done').addEventListener('click', async () => {
     if (!labelClicked) {
       const ok = confirm('Etykieta nie wydrukowana — czy na pewno chcesz oznaczyć jako gotowe?');
