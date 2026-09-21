@@ -1,0 +1,13 @@
+services:
+  packing:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: "packing"
+    restart: "always"
+    env_file: .env
+    ports:
+      - "3001:3001"
+    volumes:
+      - "./data:/app/data"
+      - "./.env:/app/.env"

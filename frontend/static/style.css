@@ -355,6 +355,23 @@ body {
 .custom-doc-status.empty { background: var(--surface2); color: var(--text-dim); border: 1px solid #333; }
 .dim { color: var(--text-dim); }
 
+/* Shown when the state file is damaged or records had to be skipped. */
+.state-banner {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  max-width: 60ch;
+  z-index: 100;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: #4a1d1d;
+  border: 1px solid var(--accent);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
 .archive-list {
   display: flex;
   flex-direction: column;
@@ -364,6 +381,9 @@ body {
   overflow-y: auto;
 }
 .archive-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
   font-family: monospace;
   font-size: 13px;
   color: var(--text-dim);

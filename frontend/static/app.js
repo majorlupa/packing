@@ -1,5 +1,51 @@
 const API = '/api';
 
+// Escape every value that came from the API (Allegro data, settings, .env) before it
+// reaches innerHTML. Allegro product names and buyer fields are untrusted input.
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+// All API calls go through here: a failed request raises instead of silently
+// re-rendering the same stale queue.
+async function api(path, options = {}) {
+  const res = await fetch(`${API}${path}`, options);
+  const type = res.headers.get('content-type') || '';
+  let payload = null;
+  if (type.includes('application/json')) {
+    try { payload = await res.json(); } catch { payload = null; }
+  }
+  if (!res.ok) {
+    const detail = payload && (payload.detail || payload.message);
+    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail || `${res.status} ${res.statusText}`));
+  }
+  return payload;
+}
+
+function reportError(prefix, err) {
+  alert(`${prefix}\n\n${err && err.message ? err.message : err}`);
+}
+
+// PDFs are fetched first so a failure (401/502/404) shows up as a message instead of
+// a browser tab full of JSON.
+async function openPdf(path) {
+  const res = await fetch(`${API}${path}`);
+  if (!res.ok) {
+    let detail = `${res.status} ${res.statusText}`;
+    try {
+      const payload = await res.json();
+      if (payload && payload.detail) detail = payload.detail;
+    } catch { /* not JSON — keep the status line */ }
+    throw new Error(detail);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  window.open(url, '_blank');
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
 let state = {
   orders: [],         // all orders from backend
   pickingLists: [],   // all picking lists
@@ -11,20 +57,49 @@ let state = {
   packingDirection: null, // 'next' | 'prev' | null
   settingsTab: 'config',
   customDocAvailable: false,
+  shipmentSettings: null, // sender + package defaults for the packing view
 };
 
 // ---- Fetch ----
 
+function renderStateBanner(status) {
+  const el = document.getElementById('state-banner');
+  if (!el) return;
+  let message = '';
+  if (status && status.ok === false) {
+    message = status.message || 'Problem ze stanem aplikacji.';
+  } else if (status && status.quarantined) {
+    message = `${status.quarantined} rekord(ów) pominięto — dane nie przechodzą walidacji.`;
+  }
+  if (!message) {
+    el.classList.add('hidden');
+    el.textContent = '';
+    return;
+  }
+  el.textContent = '⚠ ' + message;
+  el.classList.remove('hidden');
+}
+
 async function fetchAll() {
-  const [ordersRes, plRes] = await Promise.all([
-    fetch(`${API}/orders/`),
-    fetch(`${API}/picking-lists`),
-  ]);
-  state.orders = await ordersRes.json();
-  state.pickingLists = await plRes.json();
+  try {
+    const [orders, lists, settings, status] = await Promise.all([
+      api('/orders/'),
+      api('/picking-lists'),
+      api('/print/shipment-settings'),
+      api('/orders/status'),
+    ]);
+    state.orders = orders;
+    state.pickingLists = lists;
+    state.shipmentSettings = settings;
+    renderStateBanner(status);
+  } catch (err) {
+    renderStateBanner({ ok: false, message: err.message });
+    return;
+  }
   updateBadges();
   renderQueue(state.currentQueue);
 }
+
 
 // ---- Badges ----
 
@@ -54,7 +129,7 @@ function updateBadges() {
   couriers.forEach(courier => {
     const li = document.createElement('li');
     li.className = 'courier-nav-item' + (state.currentCourier === courier ? ' active' : '');
-    li.innerHTML = `${courier} <span class="badge badge-dim">${courierCounts[courier]}</span>`;
+    li.innerHTML = `${esc(courier)} <span class="badge badge-dim">${courierCounts[courier]}</span>`;
     li.addEventListener('click', (e) => {
       e.stopPropagation();
       state.currentCourier = state.currentCourier === courier ? null : courier;
@@ -156,7 +231,7 @@ function renderPending(el) {
       card.innerHTML = `
         <input type="checkbox" />
         <div class="order-info">
-          <div class="buyer">${data.qty}x ${name}</div>
+          <div class="buyer">${data.qty}x ${esc(name)}</div>
           <div class="address" style="margin-top:4px">${txCount} ${txCount === 1 ? 'transakcja' : txCount < 5 ? 'transakcje' : 'transakcji'}</div>
         </div>
       `;
@@ -185,11 +260,17 @@ function renderPending(el) {
   });
 
   el.querySelector('#btn-create-pl').addEventListener('click', async () => {
-    await fetch(`${API}/picking-lists`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: '', order_ids: [...state.selectedOrderIds] }),
-    });
+    if (!state.selectedOrderIds.size) return;
+    try {
+      await api('/picking-lists', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: '', order_ids: [...state.selectedOrderIds] }),
+      });
+    } catch (err) {
+      reportError('Nie udało się utworzyć listy', err);
+      return;
+    }
     await fetchAll();
     renderQueue('picking');
   });
@@ -215,11 +296,11 @@ function renderPicking(el) {
     card.innerHTML = `
       <div class="pl-info">
         <div class="pl-name-wrap">
-          <span class="pl-name" data-id="${pl.id}">${pl.name}</span>
+          <span class="pl-name" data-id="${pl.id}">${esc(pl.name)}</span>
           <span class="pl-count">${orderCount} zamówień</span>
         </div>
         <div class="pl-rename hidden" data-id="${pl.id}">
-          <input class="pl-rename-input" type="text" value="${pl.name}" />
+          <input class="pl-rename-input" type="text" value="${esc(pl.name)}" />
           <button class="btn btn-primary btn-rename-confirm" data-id="${pl.id}">Zapisz</button>
           <button class="btn btn-secondary btn-rename-cancel">Anuluj</button>
         </div>
@@ -236,7 +317,12 @@ function renderPicking(el) {
 
   list.querySelectorAll('.btn-revert').forEach(btn => {
     btn.addEventListener('click', async () => {
-      await fetch(`${API}/picking-lists/${btn.dataset.id}/revert`, { method: 'POST' });
+      try {
+        await api(`/picking-lists/${btn.dataset.id}/revert`, { method: 'POST' });
+      } catch (err) {
+        reportError('Nie udało się cofnąć listy', err);
+        return;
+      }
       await fetchAll();
       renderQueue('picking');
     });
@@ -270,11 +356,16 @@ function renderPicking(el) {
       const card = btn.closest('.picking-card');
       const newName = card.querySelector('.pl-rename-input').value.trim();
       if (!newName) return;
-      await fetch(`${API}/picking-lists/${btn.dataset.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newName, order_ids: [] }),
-      });
+      try {
+        await api(`/picking-lists/${btn.dataset.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: newName }),
+        });
+      } catch (err) {
+        reportError('Nie udało się zmienić nazwy', err);
+        return;
+      }
       await fetchAll();
       renderQueue('picking');
     });
@@ -282,7 +373,12 @@ function renderPicking(el) {
 
   list.querySelectorAll('.btn-start-pack').forEach(btn => {
     btn.addEventListener('click', async () => {
-      await fetch(`${API}/picking-lists/${btn.dataset.id}/start-packing`, { method: 'POST' });
+      try {
+        await api(`/picking-lists/${btn.dataset.id}/start-packing`, { method: 'POST' });
+      } catch (err) {
+        reportError('Nie udało się przenieść do pakowania', err);
+        return;
+      }
       await fetchAll();
       renderQueue('packing');
     });
@@ -308,14 +404,14 @@ function printPickingList(plId) {
   });
 
   const rows = Object.entries(consolidated).map(([name, qty]) =>
-    `<tr><td>${name}</td><td>${qty}</td></tr>`
+    `<tr><td>${esc(name)}</td><td>${qty}</td></tr>`
   ).join('');
 
   const win = window.open('', '_blank');
-  win.document.write(`<!DOCTYPE html><html><head><title>${pl.name}</title>
+  win.document.write(`<!DOCTYPE html><html><head><title>${esc(pl.name)}</title>
     <style>body{font-family:Arial;margin:40px}table{width:100%;border-collapse:collapse}
     td,th{border:1px solid #ccc;padding:8px}th{background:#eee}</style></head>
-    <body><h2>Lista: ${pl.name}</h2>
+    <body><h2>Lista: ${esc(pl.name)}</h2>
     <table><thead><tr><th>Produkt</th><th>Ilość</th></tr></thead>
     <tbody>${rows}</tbody></table>
     <script>window.onload=()=>window.print()<\/script></body></html>`);
@@ -348,6 +444,8 @@ function renderPackingCard(el) {
                   : state.packingDirection === 'prev' ? 'animate-prev' : '';
   state.packingDirection = null;
 
+  const pkg = (state.shipmentSettings && state.shipmentSettings.package) || {};
+
   view.innerHTML = `
     <div class="pack-nav">
       <button class="btn btn-secondary" id="btn-prev" ${idx === 0 ? 'disabled' : ''}>← Poprzednie</button>
@@ -356,21 +454,21 @@ function renderPackingCard(el) {
     </div>
     <div class="pack-card ${animClass}">
       <button class="btn-icon-red btn-revert-pending" id="btn-revert-pending" title="Cofnij do oczekujących">↩</button>
-      <div class="buyer">${order.buyer_name}</div>
-      <div class="address">${order.buyer_address}</div>
+      <div class="buyer">${esc(order.buyer_name)}</div>
+      <div class="address">${esc(order.buyer_address)}</div>
       <div class="allegro-id">
         <span class="allegro-id-label">ID:</span>
-        <span class="allegro-id-value">${order.allegro_id}</span>
-        <button class="btn-copy" title="Kopiuj ID" onclick="navigator.clipboard.writeText('${order.allegro_id}').then(()=>{this.textContent='✓';setTimeout(()=>this.textContent='⧉',1200)})">⧉</button>
+        <span class="allegro-id-value">${esc(order.allegro_id)}</span>
+        <button class="btn-copy" data-copy="${esc(order.allegro_id)}" title="Kopiuj ID">⧉</button>
       </div>
-      <div class="items">${order.items.map(i => `${i.quantity}x ${i.name}`).join('<br/>')}</div>
+      <div class="items">${order.items.map(i => `${i.quantity}x ${esc(i.name)}`).join('<br/>')}</div>
       <div class="pack-dims">
         <label>Wymiary (cm)</label>
-        <input type="number" class="dim-input" id="dim-l" value="30" min="1"> ×
-        <input type="number" class="dim-input" id="dim-w" value="20" min="1"> ×
-        <input type="number" class="dim-input" id="dim-h" value="40" min="1">
+        <input type="number" class="dim-input" id="dim-l" value="${esc(pkg.length ?? 30)}" min="1"> ×
+        <input type="number" class="dim-input" id="dim-w" value="${esc(pkg.width ?? 20)}" min="1"> ×
+        <input type="number" class="dim-input" id="dim-h" value="${esc(pkg.height ?? 15)}" min="1">
         <label style="margin-left:12px">Waga (kg)</label>
-        <input type="number" class="dim-input" id="dim-wt" value="1.0" min="0.1" step="0.1">
+        <input type="number" class="dim-input" id="dim-wt" value="${esc(pkg.weight ?? 1.0)}" min="0.1" step="0.1">
       </div>
       <div class="pack-buttons">
         <button class="btn btn-label" id="btn-label">🖨 Etykieta kurierska</button>
@@ -381,14 +479,33 @@ function renderPackingCard(el) {
   `;
 
   view.querySelector('#btn-revert-pending').addEventListener('click', async () => {
-    await fetch(`${API}/orders/${order.id}/revert-pending`, { method: 'POST' });
+    try {
+      await api(`/orders/${order.id}/revert-pending`, { method: 'POST' });
+    } catch (err) {
+      reportError('Nie udało się cofnąć zamówienia', err);
+      return;
+    }
     await fetchAll();
     state.packingQueue = state.orders.filter(o => o.status === 'packing');
     state.packingIndex = Math.min(state.packingIndex, Math.max(0, state.packingQueue.length - 1));
     renderPackingCard(document.getElementById('content'));
   });
 
-  let labelClicked = false;
+  const copyBtn = view.querySelector('.btn-copy');
+  if (copyBtn) {
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(copyBtn.dataset.copy);
+        copyBtn.textContent = '✓';
+        setTimeout(() => { copyBtn.textContent = '⧉'; }, 1200);
+      } catch (err) {
+        reportError('Nie udało się skopiować ID', err);
+      }
+    });
+  }
+
+  // The label may already exist from an earlier session — do not warn in that case.
+  let labelReady = Boolean(order.shipment_id);
 
   view.querySelector('#btn-prev').addEventListener('click', () => {
     state.packingDirection = 'prev';
@@ -400,28 +517,47 @@ function renderPackingCard(el) {
     state.packingIndex++;
     renderPackingCard(document.getElementById('content'));
   });
-  view.querySelector('#btn-label').addEventListener('click', () => {
-    labelClicked = true;
-    view.querySelector('#btn-label').classList.add('printed');
-    view.querySelector('#btn-label').textContent = '✓ Etykieta kurierska';
+  view.querySelector('#btn-label').addEventListener('click', async () => {
+    const btn = view.querySelector('#btn-label');
     const l  = view.querySelector('#dim-l').value;
     const w  = view.querySelector('#dim-w').value;
     const h  = view.querySelector('#dim-h').value;
     const wt = view.querySelector('#dim-wt').value;
-    window.open(`${API}/print/orders/${order.id}/label?length=${l}&width=${w}&height=${h}&weight=${wt}`, '_blank');
+    btn.disabled = true;
+    try {
+      await openPdf(`/print/orders/${order.id}/label?length=${l}&width=${w}&height=${h}&weight=${wt}`);
+      // Only claim the label is printed once the PDF actually came back.
+      labelReady = true;
+      btn.classList.add('printed');
+      btn.textContent = '✓ Etykieta kurierska';
+    } catch (err) {
+      reportError('Nie udało się pobrać etykiety', err);
+    } finally {
+      btn.disabled = false;
+    }
   });
-  view.querySelector('#btn-invoice').addEventListener('click', () => {
-    window.open(`${API}/print/orders/${order.id}/combined`, '_blank');
+  view.querySelector('#btn-invoice').addEventListener('click', async () => {
+    try {
+      await openPdf(`/print/orders/${order.id}/combined`);
+    } catch (err) {
+      reportError('Nie udało się wygenerować dokumentu', err);
+    }
   });
   view.querySelector('#btn-done').addEventListener('click', async () => {
-    if (!labelClicked) {
+    if (!labelReady) {
       const ok = confirm('Etykieta nie wydrukowana — czy na pewno chcesz oznaczyć jako gotowe?');
       if (!ok) return;
     }
     const card = view.querySelector('.pack-card');
     card.classList.add('animate-done');
     await new Promise(r => setTimeout(r, 430));
-    await fetch(`${API}/orders/${order.id}/done`, { method: 'POST' });
+    try {
+      await api(`/orders/${order.id}/done`, { method: 'POST' });
+    } catch (err) {
+      reportError('Nie udało się oznaczyć jako gotowe', err);
+      renderPackingCard(document.getElementById('content'));
+      return;
+    }
     await fetchAll();
     state.packingQueue = state.orders.filter(o => o.status === 'packing');
     state.packingIndex = Math.min(state.packingIndex, Math.max(0, state.packingQueue.length - 1));
@@ -445,28 +581,47 @@ function renderDone(el) {
   orders.forEach(order => {
     const card = document.createElement('div');
     card.className = 'order-card';
-    const trackingHtml = order.tracking_number
-      ? `<div class="tracking-number">📦 ${order.tracking_number}</div>`
-      : `<div class="tracking-number missing">— brak numeru śledzenia —</div>`;
+    const labelHtml = order.tracking_number
+      ? `<div class="tracking-number">📦 ${esc(order.tracking_number)}</div>`
+      : order.shipment_id
+        ? `<div class="tracking-number">🏷 Etykieta utworzona</div>`
+        : `<div class="tracking-number missing">— brak etykiety —</div>`;
     card.innerHTML = `
       <div class="order-info">
-        <div class="buyer">${order.buyer_name}</div>
-        <div class="address">${order.buyer_address}</div>
+        <div class="buyer">${esc(order.buyer_name)}</div>
+        <div class="address">${esc(order.buyer_address)}</div>
         <div class="allegro-id">
           <span class="allegro-id-label">ID:</span>
-          <span class="allegro-id-value">${order.allegro_id}</span>
-          <button class="btn-copy" title="Kopiuj ID" onclick="navigator.clipboard.writeText('${order.allegro_id}').then(()=>{this.textContent='✓';setTimeout(()=>this.textContent='⧉',1200)})">⧉</button>
+          <span class="allegro-id-value">${esc(order.allegro_id)}</span>
+          <button class="btn-copy" data-copy="${esc(order.allegro_id)}" title="Kopiuj ID">⧉</button>
         </div>
-        ${trackingHtml}
+        ${labelHtml}
       </div>
       <button class="btn btn-secondary btn-undo" data-id="${order.id}">↩ Cofnij</button>
     `;
     list.appendChild(card);
   });
 
+  list.querySelectorAll('.btn-copy').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(btn.dataset.copy);
+        btn.textContent = '✓';
+        setTimeout(() => { btn.textContent = '⧉'; }, 1200);
+      } catch (err) {
+        reportError('Nie udało się skopiować ID', err);
+      }
+    });
+  });
+
   list.querySelectorAll('.btn-undo').forEach(btn => {
     btn.addEventListener('click', async () => {
-      await fetch(`${API}/orders/${btn.dataset.id}/undo-done`, { method: 'POST' });
+      try {
+        await api(`/orders/${btn.dataset.id}/undo-done`, { method: 'POST' });
+      } catch (err) {
+        reportError('Nie udało się cofnąć zamówienia', err);
+        return;
+      }
       await fetchAll();
     });
   });
@@ -503,21 +658,39 @@ function renderSettings(el) {
 }
 
 async function renderSettingsShipping(panel) {
-  const res = await fetch(`${API}/print/shipment-settings`);
-  const s = await res.json();
+  const s = await api('/print/shipment-settings');
   const sender = s.sender || {};
   const pkg = s.package || {};
 
   panel.innerHTML = `
     <div class="settings-section">
       <p class="settings-desc"><strong>Dane nadawcy</strong></p>
-      <div class="settings-field"><label>Imię i nazwisko</label><input type="text" id="sh-name" value="${sender.name || ''}"></div>
-      <div class="settings-field"><label>Firma</label><input type="text" id="sh-company" value="${sender.company || ''}"></div>
-      <div class="settings-field"><label>Ulica i numer</label><input type="text" id="sh-street" value="${sender.street || ''}"></div>
-      <div class="settings-field"><label>Kod pocztowy</label><input type="text" id="sh-postal" value="${sender.postal_code || ''}"></div>
-      <div class="settings-field"><label>Miasto</label><input type="text" id="sh-city" value="${sender.city || ''}"></div>
-      <div class="settings-field"><label>E-mail</label><input type="email" id="sh-email" value="${sender.email || ''}"></div>
-      <div class="settings-field"><label>Telefon</label><input type="text" id="sh-phone" value="${sender.phone || ''}"></div>
+      <div class="settings-field"><label>Imię i nazwisko</label><input type="text" id="sh-name" value="${esc(sender.name || '')}"></div>
+      <div class="settings-field"><label>Firma</label><input type="text" id="sh-company" value="${esc(sender.company || '')}"></div>
+      <div class="settings-field"><label>Ulica i numer</label><input type="text" id="sh-street" value="${esc(sender.street || '')}"></div>
+      <div class="settings-field"><label>Kod pocztowy</label><input type="text" id="sh-postal" value="${esc(sender.postal_code || '')}"></div>
+      <div class="settings-field"><label>Miasto</label><input type="text" id="sh-city" value="${esc(sender.city || '')}"></div>
+      <div class="settings-field"><label>E-mail</label><input type="email" id="sh-email" value="${esc(sender.email || '')}"></div>
+      <div class="settings-field"><label>Telefon</label><input type="text" id="sh-phone" value="${esc(sender.phone || '')}"></div>
+    </div>
+    <div class="settings-section">
+      <p class="settings-desc"><strong>Domyślna paczka</strong> — wartości startowe w widoku pakowania.</p>
+      <div class="settings-field"><label>Długość (cm)</label><input type="number" id="sh-pkg-length" min="1" value="${esc(pkg.length ?? 30)}"></div>
+      <div class="settings-field"><label>Szerokość (cm)</label><input type="number" id="sh-pkg-width" min="1" value="${esc(pkg.width ?? 20)}"></div>
+      <div class="settings-field"><label>Wysokość (cm)</label><input type="number" id="sh-pkg-height" min="1" value="${esc(pkg.height ?? 15)}"></div>
+      <div class="settings-field"><label>Waga (kg)</label><input type="number" id="sh-pkg-weight" min="0.1" step="0.1" value="${esc(pkg.weight ?? 1.0)}"></div>
+      <div class="settings-field"><label>Rozmiar etykiety</label>
+        <select id="sh-pkg-page">
+          <option value="A6" ${pkg.page_size === 'A6' ? 'selected' : ''}>A6</option>
+          <option value="A4" ${pkg.page_size === 'A4' ? 'selected' : ''}>A4</option>
+        </select>
+      </div>
+      <div class="settings-field"><label>Format etykiety</label>
+        <select id="sh-pkg-format">
+          <option value="PDF" ${pkg.label_format === 'PDF' ? 'selected' : ''}>PDF</option>
+          <option value="ZPL" ${pkg.label_format === 'ZPL' ? 'selected' : ''}>ZPL</option>
+        </select>
+      </div>
     </div>
     <p id="shipping-note" class="settings-note hidden"></p>
     <div class="settings-actions">
@@ -526,6 +699,11 @@ async function renderSettingsShipping(panel) {
   `;
 
   panel.querySelector('#shipping-save').addEventListener('click', async () => {
+    const note = panel.querySelector('#shipping-note');
+    const num = (id, fallback) => {
+      const value = parseFloat(panel.querySelector(id).value);
+      return Number.isFinite(value) ? value : fallback;
+    };
     const body = {
       sender: {
         name:         panel.querySelector('#sh-name').value.trim(),
@@ -533,18 +711,32 @@ async function renderSettingsShipping(panel) {
         street:       panel.querySelector('#sh-street').value.trim(),
         postal_code:  panel.querySelector('#sh-postal').value.trim(),
         city:         panel.querySelector('#sh-city').value.trim(),
-        country_code: 'PL',
+        country_code: sender.country_code || 'PL',
         email:        panel.querySelector('#sh-email').value.trim(),
         phone:        panel.querySelector('#sh-phone').value.trim(),
       },
-      package: { type: 'PACKAGE', label_format: 'PDF', page_size: 'A6' },
+      package: {
+        type: 'PACKAGE',
+        length: num('#sh-pkg-length', 30),
+        width: num('#sh-pkg-width', 20),
+        height: num('#sh-pkg-height', 15),
+        weight: num('#sh-pkg-weight', 1.0),
+        label_format: panel.querySelector('#sh-pkg-format').value,
+        page_size: panel.querySelector('#sh-pkg-page').value,
+      },
     };
-    await fetch(`${API}/print/shipment-settings`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const note = panel.querySelector('#shipping-note');
+    try {
+      await api('/print/shipment-settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      note.textContent = '✗ ' + err.message;
+      note.classList.remove('hidden');
+      return;
+    }
+    state.shipmentSettings = { sender: body.sender, package: body.package };
     note.textContent = '✓ Zapisano';
     note.classList.remove('hidden');
     setTimeout(() => note.classList.add('hidden'), 3000);
@@ -552,13 +744,12 @@ async function renderSettingsShipping(panel) {
 }
 
 async function renderSettingsConfig(panel) {
-  const res  = await fetch(`${API}/config/`);
-  const data = await res.json();
+  const data = await api('/config/');
 
   panel.innerHTML = `
     <div class="settings-section">
       <p class="settings-desc">Plik konfiguracyjny API (.env)</p>
-      <textarea id="config-content" spellcheck="false">${data.content}</textarea>
+      <textarea id="config-content" spellcheck="false">${esc(data.content)}</textarea>
       <p id="config-note" class="settings-note hidden"></p>
       <div class="settings-actions">
         <button class="btn btn-primary" id="config-save">Zapisz</button>
@@ -568,25 +759,26 @@ async function renderSettingsConfig(panel) {
 
   panel.querySelector('#config-save').addEventListener('click', async () => {
     const content = panel.querySelector('#config-content').value;
-    const res  = await fetch(`${API}/config/`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
-    });
-    const result = await res.json();
     const note = panel.querySelector('#config-note');
-    note.textContent = '✓ ' + result.note;
+    try {
+      const result = await api('/config/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+      });
+      note.textContent = '✓ ' + result.note;
+    } catch (err) {
+      note.textContent = '✗ ' + err.message;
+    }
     note.classList.remove('hidden');
   });
 }
 
 async function renderSettingsDocuments(panel) {
-  const [invRes, docRes] = await Promise.all([
-    fetch(`${API}/print/invoice-settings`),
-    fetch(`${API}/print/custom-doc/info`),
+  const [data, docInfo] = await Promise.all([
+    api('/print/invoice-settings'),
+    api('/print/custom-doc/info'),
   ]);
-  const data = await invRes.json();
-  const docInfo = await docRes.json();
 
   panel.innerHTML = `
     <div class="settings-section">
@@ -602,7 +794,7 @@ async function renderSettingsDocuments(panel) {
       </div>
       <div class="settings-field">
         <label>Tekst własny (maks. 160 znaków)</label>
-        <textarea id="inv-free-text" rows="2" maxlength="160" placeholder="np. Dziękujemy za zakup!">${data.free_text || ''}</textarea>
+        <textarea id="inv-free-text" rows="2" maxlength="160" placeholder="np. Dziękujemy za zakup!">${esc(data.free_text || '')}</textarea>
         <span id="inv-free-text-count" class="settings-char-count">${(data.free_text || '').length} / 160</span>
       </div>
       <p id="invoice-settings-note" class="settings-note hidden"></p>
@@ -643,13 +835,17 @@ async function renderSettingsDocuments(panel) {
       show_allegro_id:    panel.querySelector('#inv-allegro-id').checked,
       free_text:          panel.querySelector('#inv-free-text').value,
     };
-    await fetch(`${API}/print/invoice-settings`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
     const note = panel.querySelector('#invoice-settings-note');
-    note.textContent = '✓ Zapisano';
+    try {
+      await api('/print/invoice-settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      note.textContent = '✓ Zapisano';
+    } catch (err) {
+      note.textContent = '✗ ' + err.message;
+    }
     note.classList.remove('hidden');
   });
 
@@ -683,7 +879,12 @@ async function renderSettingsDocuments(panel) {
     const btn = p.querySelector('#btn-doc-delete');
     if (!btn) return;
     btn.addEventListener('click', async () => {
-      await fetch(`${API}/print/custom-doc`, { method: 'DELETE' });
+      try {
+        await api('/print/custom-doc', { method: 'DELETE' });
+      } catch (err) {
+        reportError('Nie udało się usunąć dokumentu', err);
+        return;
+      }
       state.customDocAvailable = false;
       p.querySelector('#custom-doc-status').outerHTML =
         `<div class="custom-doc-status empty" id="custom-doc-status"><span class="dim">Brak dokumentu</span></div>`;
@@ -696,13 +897,15 @@ async function renderSettingsDocuments(panel) {
 }
 
 async function renderSettingsArchive(panel) {
-  const res = await fetch(`${API}/orders/archive`);
-  const ids = await res.json();
+  const entries = await api('/orders/archive');
 
   panel.innerHTML = `
     <div class="settings-section">
-      <p class="settings-desc">${ids.length ? `${ids.length} zarchiwizowanych zamówień.` : 'Archiwum jest puste.'}</p>
-      ${ids.length ? `<div class="archive-list">${ids.map(id => `<div class="archive-item">${id}</div>`).join('')}</div>` : ''}
+      <p class="settings-desc">${entries.length ? `${entries.length} zarchiwizowanych zamówień.` : 'Archiwum jest puste.'}</p>
+      ${entries.length ? `<div class="archive-list">${entries.map(e => `<div class="archive-item">
+        <span>${esc(e.allegro_id)}</span>
+        <span class="dim">${e.archived_at ? esc(new Date(e.archived_at).toLocaleString('pl-PL')) : 'brak daty'}</span>
+      </div>`).join('')}</div>` : ''}
     </div>
   `;
 }
@@ -722,21 +925,33 @@ document.getElementById('btn-zakoncz').addEventListener('click', async () => {
     alert('Brak zamówień w Gotowe.');
     return;
   }
-  const missing = doneOrders.filter(o => !o.tracking_number);
+  const missing = doneOrders.filter(o => !o.shipment_id && !o.tracking_number);
   if (missing.length) {
-    const ok = confirm(`${missing.length} ${missing.length === 1 ? 'zamówienie nie ma' : 'zamówień nie ma'} numeru śledzenia. Czy na pewno chcesz zakończyć dzień?`);
+    const ok = confirm(`${missing.length} ${missing.length === 1 ? 'zamówienie nie ma' : 'zamówień nie ma'} utworzonej etykiety. Czy na pewno chcesz zakończyć dzień?`);
     if (!ok) return;
   }
-  await fetch(`${API}/orders/zakoncz-dzien`, { method: 'POST' });
+  try {
+    await api('/orders/zakoncz-dzien', { method: 'POST' });
+  } catch (err) {
+    reportError('Nie udało się zakończyć dnia', err);
+    return;
+  }
   await fetchAll();
   if (state.currentQueue === 'settings') renderQueue('settings');
 });
 
 document.getElementById('btn-sync').addEventListener('click', async () => {
-  const res = await fetch(`${API}/orders/sync`, { method: 'POST' });
-  const data = await res.json();
-  if (data.detail) alert('Błąd: ' + data.detail);
-  else await fetchAll();
+  const btn = document.getElementById('btn-sync');
+  btn.disabled = true;
+  try {
+    await api('/orders/sync', { method: 'POST' });
+  } catch (err) {
+    reportError('Synchronizacja nie powiodła się', err);
+    return;
+  } finally {
+    btn.disabled = false;
+  }
+  await fetchAll();
 });
 
 document.getElementById('btn-auth').addEventListener('click', async () => {
