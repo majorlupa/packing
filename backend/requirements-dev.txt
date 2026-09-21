@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# Development / CI only — not installed in the runtime image.
+pytest==8.2.2

@@ -1,9 +1,10 @@
 """
-Allegro API client — device authorization flow + order fetching.
+Allegro API client — authorization-code OAuth + order fetching.
 Sandbox: allegro.pl.allegrosandbox.pl
 Production: allegro.pl
 """
 import os
+import asyncio
 import httpx
 from typing import List
 from models.order import Order, OrderItem
@@ -16,16 +17,36 @@ API_URL = "https://api.allegro.pl.allegrosandbox.pl" if SANDBOX else "https://ap
 CLIENT_ID = os.getenv("ALLEGRO_CLIENT_ID", "")
 CLIENT_SECRET = os.getenv("ALLEGRO_CLIENT_SECRET", "")
 
+REQUEST_TIMEOUT = float(os.getenv("ALLEGRO_TIMEOUT", "30"))
+
 # Simple in-memory token cache
-REDIRECT_URI = "http://localhost:3001/api/orders/auth/callback"
+REDIRECT_URI = os.getenv("ALLEGRO_REDIRECT_URI", "http://localhost:3001/api/orders/auth/callback")
 
 _token: str | None = None
 
 
+class AllegroError(RuntimeError):
+    """Allegro answered, but not with what we asked for (or did not answer at all)."""
+
+
+class AllegroNotAuthorized(AllegroError):
+    """No usable access token — the operator has to authorize first."""
+
+
 def _get_token() -> str:
     if _token is None:
-        raise RuntimeError("Allegro not authorized. Click 'Autoryzuj Allegro' first.")
+        raise AllegroNotAuthorized("Allegro nie jest autoryzowane. Kliknij 'Autoryzuj Allegro'.")
     return _token
+
+
+def to_http_exception(exc: AllegroError):
+    """Map an Allegro failure onto the right HTTP status for the browser."""
+    from fastapi import HTTPException
+
+    if isinstance(exc, AllegroNotAuthorized):
+        return HTTPException(status_code=401, detail=str(exc))
+    return HTTPException(status_code=502, detail=f"Allegro: {exc}")
+
 
 
 def auth_url() -> str:
@@ -39,7 +60,7 @@ def auth_url() -> str:
 
 async def exchange_code(code: str):
     global _token
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         r = await client.post(
             f"{BASE_URL}/auth/oauth/token",
             data={
@@ -49,19 +70,19 @@ async def exchange_code(code: str):
             },
             auth=(CLIENT_ID, CLIENT_SECRET),
         )
-        r.raise_for_status()
+        if not r.is_success:
+            raise AllegroError(f"Allegro token exchange {r.status_code}: {r.text[:300]}")
         _token = r.json()["access_token"]
 
 
 async def create_shipment(order, sender: dict, package: dict) -> str:
     """Create a shipment via Allegro shipment management. Returns shipment UUID."""
-    import asyncio
     token = _get_token()
 
     delivery_method_id = order.delivery_method_id
     if not delivery_method_id:
         # Fetch directly from Allegro if not stored
-        async with httpx.AsyncClient() as _c:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as _c:
             _r = await _c.get(
                 f"{API_URL}/order/checkout-forms/{order.allegro_id}",
                 headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.allegro.public.v1+json"},
@@ -69,14 +90,13 @@ async def create_shipment(order, sender: dict, package: dict) -> str:
             if _r.is_success:
                 form = _r.json()
                 delivery_method_id = form.get("delivery", {}).get("method", {}).get("id")
-                print(f"[shipment] checkout-form delivery={form.get('delivery')}", flush=True)
+                print(f"[shipment] checkout-form method id={delivery_method_id}", flush=True)
             else:
-                print(f"[shipment] checkout-form fetch failed {_r.status_code}: {_r.text[:200]}", flush=True)
-        print(f"[shipment] delivery_method_id={delivery_method_id}", flush=True)
+                print(f"[shipment] checkout-form fetch failed {_r.status_code}", flush=True)
     if not delivery_method_id:
-        raise RuntimeError("Brak delivery_method_id — kurier nieznany. Sprawdź czy zamówienie ma wybraną metodę dostawy.")
+        raise AllegroError("Brak delivery_method_id — kurier nieznany. Sprawdź czy zamówienie ma wybraną metodę dostawy.")
     if not sender.get("street"):
-        raise RuntimeError("Brak adresu nadawcy. Uzupełnij dane w Ustawienia → Wysyłka.")
+        raise AllegroError("Brak adresu nadawcy. Uzupełnij dane w Ustawienia → Wysyłka.")
 
     payload = {
         "input": {
@@ -113,7 +133,7 @@ async def create_shipment(order, sender: dict, package: dict) -> str:
     if package.get("label_format", "PDF") == "PDF":
         payload["input"]["pageSize"] = package.get("page_size", "A6")
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         r = await client.post(
             f"{API_URL}/shipment-management/shipments/create-commands",
             headers={
@@ -124,10 +144,10 @@ async def create_shipment(order, sender: dict, package: dict) -> str:
             json=payload,
         )
         if not r.is_success:
-            raise RuntimeError(f"Allegro create shipment {r.status_code}: {r.text}")
+            raise AllegroError(f"Allegro create shipment {r.status_code}: {r.text[:300]}")
         command_id = r.json().get("commandId")
         if not command_id:
-            raise RuntimeError("Brak commandId w odpowiedzi Allegro.")
+            raise AllegroError("Brak commandId w odpowiedzi Allegro.")
 
         # Poll for result
         for _ in range(15):
@@ -140,7 +160,7 @@ async def create_shipment(order, sender: dict, package: dict) -> str:
                 },
             )
             if not r.is_success:
-                raise RuntimeError(f"Allegro shipment status {r.status_code}: {r.text}")
+                raise AllegroError(f"Allegro shipment status {r.status_code}: {r.text[:300]}")
             data = r.json()
             status = data.get("status")
             if status == "SUCCESS":
@@ -148,15 +168,15 @@ async def create_shipment(order, sender: dict, package: dict) -> str:
             if status == "ERROR":
                 errors = data.get("errors", [])
                 msg = errors[0].get("message", "unknown") if errors else "unknown"
-                raise RuntimeError(f"Allegro shipment creation failed: {msg}")
+                raise AllegroError(f"Allegro shipment creation failed: {msg}")
 
-    raise RuntimeError("Przekroczono czas oczekiwania na utworzenie przesyłki.")
+    raise AllegroError("Przekroczono czas oczekiwania na utworzenie przesyłki.")
 
 
-async def download_label(shipment_id: str) -> bytes:
+async def download_label(shipment_id: str, page_size: str = "A6") -> bytes:
     """Download label PDF for a shipment management UUID."""
     token = _get_token()
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         r = await client.post(
             f"{API_URL}/shipment-management/label",
             headers={
@@ -164,26 +184,27 @@ async def download_label(shipment_id: str) -> bytes:
                 "Content-Type": "application/vnd.allegro.public.v1+json",
                 "Accept": "application/octet-stream, application/vnd.allegro.public.v1+json",
             },
-            json={"shipmentIds": [shipment_id], "pageSize": "A6"},
+            json={"shipmentIds": [shipment_id], "pageSize": page_size},
         )
         if r.status_code == 204:
-            raise RuntimeError("Allegro nie ma jeszcze etykiety dla tej przesyłki.")
+            raise AllegroError("Allegro nie ma jeszcze etykiety dla tej przesyłki.")
         if not r.is_success:
-            raise RuntimeError(f"Allegro label API {r.status_code}: {r.text}")
+            raise AllegroError(f"Allegro label API {r.status_code}: {r.text[:300]}")
         return r.content
 
 
-async def fetch_orders() -> List[Order]:
+async def fetch_orders(limit: int = 100) -> List[Order]:
     """Fetch recent READY_FOR_PROCESSING orders from Allegro."""
     token = _get_token()
     orders = []
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         r = await client.get(
             f"{API_URL}/order/checkout-forms",
             headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.allegro.public.v1+json"},
-            params={"status": "READY_FOR_PROCESSING", "limit": 100},
+            params={"status": "READY_FOR_PROCESSING", "limit": limit},
         )
-        r.raise_for_status()
+        if not r.is_success:
+            raise AllegroError(f"Allegro checkout-forms {r.status_code}: {r.text[:300]}")
         data = r.json()
         for form in data.get("checkoutForms", []):
             buyer = form.get("buyer", {})

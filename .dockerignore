@@ -1,0 +1,13 @@
+# Keep buyer PII, credentials and history out of the build context.
+.git
+.gitignore
+.claude
+__pycache__/
+*.pyc
+*.pyo
+.env
+data/
+backend/tests/
+*.md
+delivery.txt
+sadas.txt
