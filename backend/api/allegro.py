@@ -49,12 +49,13 @@ def to_http_exception(exc: AllegroError):
 
 
 
-def auth_url() -> str:
+def auth_url(state: str) -> str:
     return (
         f"{BASE_URL}/auth/oauth/authorize"
         f"?response_type=code"
         f"&client_id={CLIENT_ID}"
         f"&redirect_uri={REDIRECT_URI}"
+        f"&state={state}"
     )
 
 

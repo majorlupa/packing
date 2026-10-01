@@ -7,4 +7,5 @@ __pycache__/
 delivery.txt
 sadas.txt
 .claude/
-
+/api.md
+/shipment.md
