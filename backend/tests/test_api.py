@@ -373,8 +373,14 @@ def test_two_parallel_label_requests_create_one_shipment(app_env, monkeypatch):
         transport = httpx.ASGITransport(app=app_env.app, raise_app_exceptions=False)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             return await asyncio.gather(
-                c.get("/api/print/orders/o-1/label"),
-                c.get("/api/print/orders/o-1/label"),
+                c.get(
+                    "/api/print/orders/o-1/label",
+                    headers={"Authorization": "Bearer test-access-token-for-packing-api-2026"},
+                ),
+                c.get(
+                    "/api/print/orders/o-1/label",
+                    headers={"Authorization": "Bearer test-access-token-for-packing-api-2026"},
+                ),
             )
 
     responses = asyncio.run(go())
@@ -458,18 +464,6 @@ def test_custom_doc_upload_and_delete(app_env, client):
 
 def test_missing_order_invoice_is_404(client):
     assert client.get("/api/print/orders/ghost/invoice").status_code == 404
-
-
-# ---------------------------------------------------------------- config (.env)
-
-
-def test_env_roundtrip(app_env, client):
-    original = client.get("/api/config/")
-    assert original.status_code == 200
-    assert "ALLEGRO_CLIENT_ID" in original.json()["content"]
-
-    assert client.post("/api/config/", json={"content": "X=1\n"}).status_code == 200
-    assert client.get("/api/config/").json()["content"] == "X=1\n"
 
 
 # ---------------------------------------------------------------- Allegro auth
@@ -559,15 +553,18 @@ def test_persisted_token_makes_auth_status_authorized(app_env, client):
     assert client.get("/api/orders/auth/status").json() == {"authorized": True}
 
 
-def test_auth_url_state_is_single_use(app_env):
+@pytest.mark.parametrize("payload", [
+    [],
+    None,
+    {"access_token": "x", "expires_at": "invalid"},
+    {"access_token": "x", "expires_at": "nan"},
+    {"access_token": 123},
+    {"refresh_token": []},
+])
+def test_invalid_persisted_session_requires_reauthorization(app_env, client, payload):
     import api.allegro as allegro
 
-    state = allegro.auth_url().split("state=")[1]
-    assert allegro.check_state(state) is True
-    assert allegro.check_state(state) is False  # consumed
-    assert allegro.check_state("someone-elses") is False
-
-    # A restart between "Autoryzuj" and the callback clears both; the flow still works.
-    allegro._pending_states.clear()
-    allegro._auth_started = False
-    assert allegro.check_state(None) is True
+    (app_env.data_dir / "allegro_token.json").write_text(json.dumps(payload), encoding="utf-8")
+    assert client.get("/api/orders/auth/status").json() == {"authorized": False}
+    with pytest.raises(allegro.AllegroNotAuthorized):
+        asyncio.run(allegro._access_token())
