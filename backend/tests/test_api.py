@@ -106,6 +106,74 @@ def test_sync_without_authorization_is_401(app_env, client):
     assert "Autoryzuj" in response.json()["detail"]
 
 
+def _checkout_form(allegro_id):
+    return {
+        "id": allegro_id,
+        "buyer": {"firstName": "Jan", "lastName": "Kowalski", "email": "j@e.pl", "phoneNumber": "500100200"},
+        "delivery": {
+            "address": {"street": "ul. Testowa 1", "zipCode": "00-001", "city": "Warszawa", "countryCode": "PL"},
+            "method": {"id": "dm-1", "name": "Kurier"},
+            "pickupPoint": None,
+        },
+        "lineItems": [{"offer": {"name": "Wiertarka"}, "quantity": 1, "price": {"amount": "10.00"}}],
+    }
+
+
+def _fake_checkout_client(monkeypatch, pages):
+    """Serve {offset: [forms]} so pagination can be tested without the network."""
+    import api.allegro as allegro
+
+    class FakeResponse:
+        is_success = True
+        text = ""
+
+        def __init__(self, forms):
+            self._forms = forms
+
+        def json(self):
+            return {"checkoutForms": self._forms}
+
+    class FakeClient:
+        def __init__(self):
+            self.offsets = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, headers=None, params=None):
+            self.offsets.append(params["offset"])
+            return FakeResponse(pages.get(params["offset"], []))
+
+    fake = FakeClient()
+    monkeypatch.setattr(allegro.httpx, "AsyncClient", lambda **kwargs: fake)
+    allegro._token = "test-token"
+    return fake
+
+
+def test_fetch_orders_paginates_past_the_first_hundred(app_env, monkeypatch):
+    import api.allegro as allegro
+
+    pages = {0: [_checkout_form(f"a-{i}") for i in range(100)], 100: [_checkout_form("a-100")]}
+    fake = _fake_checkout_client(monkeypatch, pages)
+
+    orders = asyncio.run(allegro.fetch_orders())
+    assert len(orders) == 101
+    assert fake.offsets == [0, 100]
+
+
+def test_fetch_orders_skips_a_malformed_line_item(app_env, monkeypatch):
+    import api.allegro as allegro
+
+    malformed = {"id": "a-broken", "lineItems": [{"quantity": 1}]}  # no offer
+    _fake_checkout_client(monkeypatch, {0: [_checkout_form("a-good"), malformed]})
+
+    orders = asyncio.run(allegro.fetch_orders())
+    assert [o.allegro_id for o in orders] == ["a-good"]
+
+
 # ---------------------------------------------------------------- request contracts
 
 

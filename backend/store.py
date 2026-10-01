@@ -314,10 +314,6 @@ def get_archive() -> List[dict]:
         return [dict(entry) for entry in _load()["archive"]]
 
 
-def archived_allegro_ids() -> set:
-    return {entry["allegro_id"] for entry in get_archive() if entry.get("allegro_id")}
-
-
 def archive_done_orders() -> int:
     """Tombstone every done order, drop it from state, and clean up the picking lists."""
 

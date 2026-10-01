@@ -64,9 +64,9 @@ async def sync_from_allegro():
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Brak łączności z Allegro: {exc}")
 
-    archived_allegro_ids = store.archived_allegro_ids()
-
     def mutate(state):
+        # Read the archive inside the transaction: a concurrent "end of day" must not be missed.
+        archived_allegro_ids = {entry["allegro_id"] for entry in state["archive"] if entry.get("allegro_id")}
         index = {v["allegro_id"]: k for k, v in state["orders"].items()}
         added = 0
         updated = 0
