@@ -12,6 +12,7 @@ import logging
 import math
 import os
 import asyncio
+import io
 import time
 import httpx
 from typing import List
@@ -193,8 +194,32 @@ def _shipment_error(response: httpx.Response) -> str:
     return detail[:1000] or "Sprawdź ustawienia Wysyłam z Allegro i uprawnienia aplikacji do przesyłek."
 
 
+DRY_RUN_PREFIX = "dry-run-"
+
+
+def _dry_run_enabled() -> bool:
+    """PACKING_SHIPMENT_DRY_RUN=1 exercises the label flow without buying shipments."""
+    return os.getenv("PACKING_SHIPMENT_DRY_RUN", "").lower() in ("1", "true", "yes")
+
+
+def _dry_run_label(page_size: str) -> bytes:
+    """A real, blank PDF so the browser print flow behaves exactly as with a carrier label."""
+    from pypdf import PdfWriter
+
+    width, height = {"A4": (595, 842), "A6": (298, 420)}.get(page_size.upper(), (298, 420))
+    writer = PdfWriter()
+    writer.add_blank_page(width=width, height=height)
+    writer.add_metadata({"/Title": "DRY RUN — testowa etykieta", "/Producer": "Weles"})
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
 async def create_shipment(order, sender: dict, package: dict) -> str:
     """Create a shipment via Allegro shipment management. Returns shipment UUID."""
+    if _dry_run_enabled():
+        logger.warning("PACKING_SHIPMENT_DRY_RUN=1: pomijam tworzenie przesyłki w Allegro (%s)", order.allegro_id)
+        return f"{DRY_RUN_PREFIX}{uuid.uuid4()}"
     token = await _access_token()
 
     # The legacy sender argument is retained for callers/settings compatibility.
@@ -282,6 +307,9 @@ async def create_shipment(order, sender: dict, package: dict) -> str:
 
 async def download_label(shipment_id: str, page_size: str = "A6") -> bytes:
     """Download label PDF for a shipment management UUID."""
+    if shipment_id.startswith(DRY_RUN_PREFIX):
+        logger.warning("PACKING_SHIPMENT_DRY_RUN: zwracam atrapę etykiety dla %s", shipment_id)
+        return _dry_run_label(page_size)
     token = await _access_token()
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         r = await client.post(
