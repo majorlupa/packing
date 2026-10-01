@@ -172,6 +172,30 @@ def test_order_moved_to_a_new_picking_list_leaves_the_old_one(app_env, client):
 # ---------------------------------------------------------------- settings
 
 
+def test_duplicate_requested_orders_are_only_attached_once(app_env, client):
+    app_env.write_state(app_env.default_state({"o-1": sample_order()}))
+    response = client.post("/api/picking-lists", json={"order_ids": ["o-1", "o-1"]})
+    assert response.status_code == 200
+    assert response.json()["order_ids"] == ["o-1"]
+
+
+def test_revert_removes_every_legacy_duplicate_reference(app_env, client):
+    orders = {"o-1": sample_order(), "o-2": sample_order("o-2", "a-2")}
+    state = app_env.default_state(orders)
+    state["picking_lists"] = {
+        "pl-1": {"id": "pl-1", "name": "Legacy", "order_ids": ["o-1", "o-1", "o-2"]},
+        "pl-2": {"id": "pl-2", "name": "Empty after detach", "order_ids": ["o-1", "o-1"]},
+    }
+    app_env.write_state(state)
+    assert client.post("/api/orders/o-1/revert-pending").status_code == 200
+    lists = client.get("/api/picking-lists").json()
+    assert [pl["id"] for pl in lists] == ["pl-1"]
+    assert lists[0]["order_ids"] == ["o-2"]
+    assert client.post("/api/picking-lists/pl-1/start-packing").status_code == 200
+    statuses = {order["id"]: order["status"] for order in client.get("/api/orders/").json()}
+    assert statuses == {"o-1": "pending", "o-2": "packing"}
+
+
 def test_shipment_settings_reject_garbage_and_stay_readable(client):
     bad = client.post("/api/print/shipment-settings", json={"sender": "oops", "package": []})
     assert bad.status_code == 422
@@ -404,8 +428,14 @@ def test_two_parallel_label_requests_create_one_shipment(app_env, monkeypatch):
         transport = httpx.ASGITransport(app=app_env.app, raise_app_exceptions=False)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             return await asyncio.gather(
-                c.get("/api/print/orders/o-1/label"),
-                c.get("/api/print/orders/o-1/label"),
+                c.get(
+                    "/api/print/orders/o-1/label",
+                    headers={"Authorization": "Bearer test-access-token-for-packing-api-2026"},
+                ),
+                c.get(
+                    "/api/print/orders/o-1/label",
+                    headers={"Authorization": "Bearer test-access-token-for-packing-api-2026"},
+                ),
             )
 
     responses = asyncio.run(go())
@@ -489,15 +519,3 @@ def test_custom_doc_upload_and_delete(app_env, client):
 
 def test_missing_order_invoice_is_404(client):
     assert client.get("/api/print/orders/ghost/invoice").status_code == 404
-
-
-# ---------------------------------------------------------------- config (.env)
-
-
-def test_env_roundtrip(app_env, client):
-    original = client.get("/api/config/")
-    assert original.status_code == 200
-    assert "ALLEGRO_CLIENT_ID" in original.json()["content"]
-
-    assert client.post("/api/config/", json={"content": "X=1\n"}).status_code == 200
-    assert client.get("/api/config/").json()["content"] == "X=1\n"

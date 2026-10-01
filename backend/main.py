@@ -1,10 +1,11 @@
+import hmac
 import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import APIRouter, FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -12,7 +13,6 @@ import store
 from routes.orders import router as orders_router
 from routes.queue import router as queue_router
 from routes.print_routes import router as print_router
-from routes.config import router as config_router
 
 logger = logging.getLogger("packing")
 
@@ -37,13 +37,6 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="Packing App", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=CORS_ORIGINS,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 
 @app.exception_handler(store.StateError)
 async def state_error_handler(request: Request, exc: store.StateError):
@@ -59,8 +52,53 @@ api = APIRouter(prefix="/api")
 api.include_router(orders_router)
 api.include_router(queue_router)
 api.include_router(print_router)
-api.include_router(config_router)
 app.include_router(api)
+
+
+@app.middleware("http")
+async def require_api_token(request: Request, call_next):
+    """Require the operator's bearer token for every API route except OAuth callback."""
+    if (
+        request.method == "OPTIONS"
+        or not request.url.path.startswith("/api/")
+        or request.url.path == "/api/orders/auth/callback"
+    ):
+        return await call_next(request)
+
+    expected = os.getenv("PACKING_ACCESS_TOKEN", "")
+    if len(expected) < 32:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "PACKING_ACCESS_TOKEN must be configured with at least 32 characters."},
+        )
+
+    authorization = request.headers.get("authorization", "")
+    scheme, _, supplied = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not hmac.compare_digest(
+        supplied.encode("utf-8"), expected.encode("utf-8")
+    ):
+        return Response(
+            status_code=401,
+            content='{"detail":"Authentication required."}',
+            media_type="application/json",
+            headers={
+                "WWW-Authenticate": "Bearer",
+                "Cache-Control": "no-store",
+                "X-Packing-Auth-Required": "1",
+            },
+        )
+
+    return await call_next(request)
+
+
+# CORS must wrap the auth middleware so preflights and auth errors receive CORS headers.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["X-Packing-Auth-Required"],
+)
 
 # In the single-container image the backend serves the built-in static UI.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent

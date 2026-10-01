@@ -25,8 +25,7 @@ def _detach_from_lists(state: dict, order_id: str) -> None:
     """
     empty = []
     for pl_id, picking_list in state["picking_lists"].items():
-        if order_id in picking_list["order_ids"]:
-            picking_list["order_ids"].remove(order_id)
+        picking_list["order_ids"] = [oid for oid in picking_list["order_ids"] if oid != order_id]
         if not picking_list["order_ids"]:
             empty.append(pl_id)
     for pl_id in empty:
@@ -50,20 +49,21 @@ async def rename_picking_list(pl_id: str, req: RenamePickingListRequest):
 @router.post("/picking-lists")
 async def create_picking_list(req: CreatePickingListRequest):
     """Group selected pending orders into a picking list."""
+    order_ids = list(dict.fromkeys(req.order_ids))
 
     def mutate(state):
-        for oid in req.order_ids:
+        for oid in order_ids:
             if oid not in state["orders"]:
                 raise HTTPException(status_code=404, detail=f"Order {oid} not found.")
         # Selecting an order that sits in another list moves it instead of leaving a dangling id.
-        for oid in req.order_ids:
+        for oid in order_ids:
             _detach_from_lists(state, oid)
 
         state["picking_list_counter"] = int(state.get("picking_list_counter") or 0) + 1
         pl = PickingList(
             id=str(uuid.uuid4()),
             name=req.name or f"Lista #{state['picking_list_counter']}",
-            order_ids=list(req.order_ids),
+            order_ids=order_ids,
         )
         state["picking_lists"][pl.id] = pl.model_dump(mode="json")
         for oid in pl.order_ids:
