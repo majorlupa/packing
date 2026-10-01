@@ -62,19 +62,28 @@ function reportError(prefix, err) {
 // PDFs are fetched first so a failure (401/502/404) shows up as a message instead of
 // a browser tab full of JSON.
 async function openPdf(path) {
-  const res = await apiFetch(path);
-  if (!res.ok) {
-    let detail = `${res.status} ${res.statusText}`;
-    try {
-      const payload = await res.json();
-      if (payload && payload.detail) detail = payload.detail;
-    } catch { /* not JSON — keep the status line */ }
-    throw new Error(detail);
+  // Reserve the tab during the click; browsers block popups after a slow API call.
+  const printTab = window.open('about:blank', '_blank');
+  if (!printTab) throw new Error('Przeglądarka blokuje okno wydruku. Zezwól na wyskakujące okna i spróbuj ponownie.');
+  printTab.opener = null;
+  try {
+    const res = await apiFetch(path);
+    if (!res.ok) {
+      let detail = `${res.status} ${res.statusText}`;
+      try {
+        const payload = await res.json();
+        if (payload && payload.detail) detail = payload.detail;
+      } catch { /* not JSON — keep the status line */ }
+      throw new Error(detail);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    printTab.location.replace(url);
+  } catch (err) {
+    printTab.close();
+    throw err;
   }
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  window.open(url, '_blank');
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 let state = {
@@ -555,6 +564,8 @@ function renderPackingCard(el) {
     const h  = view.querySelector('#dim-h').value;
     const wt = view.querySelector('#dim-wt').value;
     btn.disabled = true;
+    const previousLabel = btn.textContent;
+    btn.textContent = 'Generowanie etykiety…';
     try {
       await openPdf(`/print/orders/${order.id}/label?length=${l}&width=${w}&height=${h}&weight=${wt}`);
       // Only claim the label is printed once the PDF actually came back.
@@ -562,6 +573,7 @@ function renderPackingCard(el) {
       btn.classList.add('printed');
       btn.textContent = '✓ Etykieta kurierska';
     } catch (err) {
+      btn.textContent = previousLabel;
       reportError('Nie udało się pobrać etykiety', err);
     } finally {
       btn.disabled = false;
@@ -693,14 +705,8 @@ async function renderSettingsShipping(panel) {
 
   panel.innerHTML = `
     <div class="settings-section">
-      <p class="settings-desc"><strong>Dane nadawcy</strong></p>
-      <div class="settings-field"><label>Imię i nazwisko</label><input type="text" id="sh-name" value="${esc(sender.name || '')}"></div>
-      <div class="settings-field"><label>Firma</label><input type="text" id="sh-company" value="${esc(sender.company || '')}"></div>
-      <div class="settings-field"><label>Ulica i numer</label><input type="text" id="sh-street" value="${esc(sender.street || '')}"></div>
-      <div class="settings-field"><label>Kod pocztowy</label><input type="text" id="sh-postal" value="${esc(sender.postal_code || '')}"></div>
-      <div class="settings-field"><label>Miasto</label><input type="text" id="sh-city" value="${esc(sender.city || '')}"></div>
-      <div class="settings-field"><label>E-mail</label><input type="email" id="sh-email" value="${esc(sender.email || '')}"></div>
-      <div class="settings-field"><label>Telefon</label><input type="text" id="sh-phone" value="${esc(sender.phone || '')}"></div>
+      <p class="settings-desc">Dane nadawcy, odbiorcy i punktu odbioru pobieramy automatycznie z Allegro.
+      Adres nadawcy ustaw w książce adresowej Wysyłam z Allegro.</p>
     </div>
     <div class="settings-section">
       <p class="settings-desc"><strong>Domyślna paczka</strong> — wartości startowe w widoku pakowania.</p>
@@ -714,12 +720,7 @@ async function renderSettingsShipping(panel) {
           <option value="A4" ${pkg.page_size === 'A4' ? 'selected' : ''}>A4</option>
         </select>
       </div>
-      <div class="settings-field"><label>Format etykiety</label>
-        <select id="sh-pkg-format">
-          <option value="PDF" ${pkg.label_format === 'PDF' ? 'selected' : ''}>PDF</option>
-          <option value="ZPL" ${pkg.label_format === 'ZPL' ? 'selected' : ''}>ZPL</option>
-        </select>
-      </div>
+      <p class="settings-desc">Etykiety są generowane w formacie PDF do wydruku w przeglądarce.</p>
     </div>
     <p id="shipping-note" class="settings-note hidden"></p>
     <div class="settings-actions">
@@ -734,23 +735,14 @@ async function renderSettingsShipping(panel) {
       return Number.isFinite(value) ? value : fallback;
     };
     const body = {
-      sender: {
-        name:         panel.querySelector('#sh-name').value.trim(),
-        company:      panel.querySelector('#sh-company').value.trim(),
-        street:       panel.querySelector('#sh-street').value.trim(),
-        postal_code:  panel.querySelector('#sh-postal').value.trim(),
-        city:         panel.querySelector('#sh-city').value.trim(),
-        country_code: sender.country_code || 'PL',
-        email:        panel.querySelector('#sh-email').value.trim(),
-        phone:        panel.querySelector('#sh-phone').value.trim(),
-      },
+      sender, // Preserve legacy settings; shipment addresses now come from Allegro.
       package: {
         type: 'PACKAGE',
         length: num('#sh-pkg-length', 30),
         width: num('#sh-pkg-width', 20),
         height: num('#sh-pkg-height', 15),
         weight: num('#sh-pkg-weight', 1.0),
-        label_format: panel.querySelector('#sh-pkg-format').value,
+        label_format: 'PDF',
         page_size: panel.querySelector('#sh-pkg-page').value,
       },
     };
