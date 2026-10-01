@@ -5,10 +5,13 @@ Production: allegro.pl
 """
 import os
 import asyncio
+import logging
 import httpx
 from typing import List
 from models.order import Order, OrderItem
 import uuid
+
+logger = logging.getLogger("packing.allegro")
 
 SANDBOX = os.getenv("ALLEGRO_SANDBOX", "true").lower() == "true"
 BASE_URL = "https://allegro.pl.allegrosandbox.pl" if SANDBOX else "https://allegro.pl"
@@ -193,48 +196,61 @@ async def download_label(shipment_id: str, page_size: str = "A6") -> bytes:
         return r.content
 
 
+# Some forms can be paginated forever only in theory; a day's packing fits in one page.
+MAX_SYNC_PAGES = 10
+
+
 async def fetch_orders(limit: int = 100) -> List[Order]:
-    """Fetch recent READY_FOR_PROCESSING orders from Allegro."""
+    """Fetch recent READY_FOR_PROCESSING orders from Allegro, page by page."""
     token = _get_token()
-    orders = []
+    orders: List[Order] = []
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.allegro.public.v1+json"}
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-        r = await client.get(
-            f"{API_URL}/order/checkout-forms",
-            headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.allegro.public.v1+json"},
-            params={"status": "READY_FOR_PROCESSING", "limit": limit},
-        )
-        if not r.is_success:
-            raise AllegroError(f"Allegro checkout-forms {r.status_code}: {r.text[:300]}")
-        data = r.json()
-        for form in data.get("checkoutForms", []):
-            buyer = form.get("buyer", {})
-            delivery = form.get("delivery", {}).get("address", {})
-            items = [
-                OrderItem(
-                    name=li["offer"]["name"],
-                    quantity=li["quantity"],
-                    unit_price=float(li["price"]["amount"]) if li.get("price") else None,
-                )
-                for li in form.get("lineItems", [])
-            ]
-            delivery_root = form.get("delivery", {})
-            courier = delivery_root.get("method", {}).get("name")
-            pickup_point = delivery_root.get("pickupPoint", {}).get("id")
-            delivery_method_id = delivery_root.get("method", {}).get("id")
-            orders.append(Order(
-                id=str(uuid.uuid4()),
-                allegro_id=form["id"],
-                buyer_name=f"{buyer.get('firstName', '')} {buyer.get('lastName', '')}".strip(),
-                buyer_address=f"{delivery.get('street', '')} {delivery.get('zipCode', '')} {delivery.get('city', '')}".strip(),
-                items=items,
-                courier=courier,
-                pickup_point=pickup_point,
-                delivery_method_id=delivery_method_id,
-                buyer_email=buyer.get("email"),
-                buyer_phone=buyer.get("phoneNumber"),
-                buyer_street=delivery.get("street"),
-                buyer_postal_code=delivery.get("zipCode"),
-                buyer_city=delivery.get("city"),
-                buyer_country=delivery.get("countryCode", "PL"),
-            ))
+        for page in range(MAX_SYNC_PAGES):
+            r = await client.get(
+                f"{API_URL}/order/checkout-forms",
+                headers=headers,
+                params={"status": "READY_FOR_PROCESSING", "limit": limit, "offset": page * limit},
+            )
+            if not r.is_success:
+                raise AllegroError(f"Allegro checkout-forms {r.status_code}: {r.text[:300]}")
+            forms = r.json().get("checkoutForms") or []
+            for form in forms:
+                try:
+                    orders.append(_order_from_form(form))
+                except (AttributeError, KeyError, TypeError, ValueError) as exc:
+                    # One malformed order must not fail the whole sync.
+                    logger.warning("pomijam zamówienie z Allegro: %s", exc)
+            if len(forms) < limit:
+                break
     return orders
+
+
+def _order_from_form(form: dict) -> Order:
+    buyer = form.get("buyer") or {}
+    delivery_root = form.get("delivery") or {}
+    delivery = delivery_root.get("address") or {}
+    items = [
+        OrderItem(
+            name=li["offer"]["name"],
+            quantity=li["quantity"],
+            unit_price=float(li["price"]["amount"]) if li.get("price") else None,
+        )
+        for li in form.get("lineItems") or []
+    ]
+    return Order(
+        id=str(uuid.uuid4()),
+        allegro_id=form["id"],
+        buyer_name=f"{buyer.get('firstName', '')} {buyer.get('lastName', '')}".strip(),
+        buyer_address=f"{delivery.get('street', '')} {delivery.get('zipCode', '')} {delivery.get('city', '')}".strip(),
+        items=items,
+        courier=(delivery_root.get("method") or {}).get("name"),
+        pickup_point=(delivery_root.get("pickupPoint") or {}).get("id"),
+        delivery_method_id=(delivery_root.get("method") or {}).get("id"),
+        buyer_email=buyer.get("email"),
+        buyer_phone=buyer.get("phoneNumber"),
+        buyer_street=delivery.get("street"),
+        buyer_postal_code=delivery.get("zipCode"),
+        buyer_city=delivery.get("city"),
+        buyer_country=delivery.get("countryCode", "PL"),
+    )
