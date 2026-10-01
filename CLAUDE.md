@@ -68,6 +68,9 @@ may only be created once, so a double click must not create two.
 
 ## Integration notes
 
+- Allegro access and refresh tokens are persisted to `data/allegro_token.json` (mode 0600).
+  A restart preserves the session, but invalidates any unfinished OAuth authorization flow.
+
 - Allegro uses OAuth2 authorization-code flow.
 - Shipment labels use Allegro Shipment Management.
 - `backend/api/inpost_shipx.py` is retained for reference but is not used by the current label flow.

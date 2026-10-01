@@ -100,7 +100,7 @@ async def get_archive():
 
 @router.get("/auth/status")
 async def auth_status():
-    return {"authorized": allegro._token is not None}
+    return {"authorized": allegro.is_authorized()}
 
 
 @router.get("/auth/url")

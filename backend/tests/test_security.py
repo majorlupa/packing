@@ -81,3 +81,23 @@ def test_oauth_callback_requires_valid_unexpired_single_use_state(app_env, clien
     monkeypatch.setattr(orders, "_oauth_state_deadline", 0.0)
     assert request_without_fixture_auth(app_env, callback + f"?code=code&state={state}").status_code == 400
     assert exchanged == ["code"]
+
+
+def test_restart_invalidates_pending_oauth_callback(app_env, client, monkeypatch):
+    import api.allegro as allegro
+    import routes.orders as orders
+
+    exchanged = []
+
+    async def exchange(code):
+        exchanged.append(code)
+
+    monkeypatch.setattr(allegro, "exchange_code", exchange)
+    url = client.get("/api/orders/auth/url").json()["url"]
+    state = parse_qs(urlparse(url).query)["state"][0]
+    monkeypatch.setattr(orders, "_oauth_state", None)
+    monkeypatch.setattr(orders, "_oauth_state_deadline", 0.0)
+    callback = "/api/orders/auth/callback?code=code"
+    for suffix in ("", f"&state={state}", "&state=wrong"):
+        assert request_without_fixture_auth(app_env, callback + suffix).status_code == 400
+    assert exchanged == []
