@@ -127,3 +127,35 @@ def test_label_download_rejects_non_pdf(shipment_api, content):
     install(lambda request: httpx.Response(200, content=content))
     with pytest.raises(allegro.AllegroError, match='PDF'):
         asyncio.run(allegro.download_label('shipment-1'))
+
+
+def test_dry_run_label_flow_never_touches_allegro(app_env, monkeypatch):
+    import api.allegro as allegro
+    from models.order import Order
+
+    def explode(**kwargs):
+        raise AssertionError('dry run must not open an HTTP client')
+
+    monkeypatch.setattr(allegro.httpx, 'AsyncClient', explode)
+    monkeypatch.setenv('PACKING_SHIPMENT_DRY_RUN', '1')
+
+    shipment_id = asyncio.run(allegro.create_shipment(Order(**sample_order()), {}, {}))
+    assert shipment_id.startswith('dry-run-')
+    assert asyncio.run(allegro.download_label(shipment_id, 'A4')).startswith(b'%PDF-')
+
+
+def test_dry_run_label_route_works_without_allegro_authorization(app_env, client, monkeypatch):
+    """No Allegro token at all: the beta instance can test the label flow end to end."""
+    monkeypatch.setenv('PACKING_SHIPMENT_DRY_RUN', '1')
+    app_env.write_state(app_env.default_state({'o-1': sample_order('o-1', 'a-1')}))
+
+    response = client.get('/api/print/orders/o-1/label')
+    assert response.status_code == 200
+    assert response.content.startswith(b'%PDF-')
+    state = json.loads(app_env.state_file.read_text(encoding='utf-8'))
+    assert state['orders']['o-1']['shipment_id'].startswith('dry-run-')
+
+    # Printing again reuses the dry-run shipment instead of creating another one.
+    assert client.get('/api/print/orders/o-1/label').status_code == 200
+    state = json.loads(app_env.state_file.read_text(encoding='utf-8'))
+    assert state['orders']['o-1']['shipment_id'].startswith('dry-run-')

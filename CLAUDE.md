@@ -77,6 +77,9 @@ may only be created once, so a double click must not create two.
   Set the sender address in Allegro's address book; legacy local sender settings are ignored.
   The packing view controls parcel dimensions/weight. New labels are always PDF; A4/A6 is
   applied at download time. Existing shipment IDs are reused on subsequent print attempts.
+- `PACKING_SHIPMENT_DRY_RUN=true` exercises the whole label flow without calling Allegro:
+  `create_shipment` returns a `dry-run-…` id and `download_label` a blank PDF. Intended for the
+  beta instance; never enable it in production.
 - Shipment HTTP contract tests: `python -m pytest backend/tests/test_allegro_shipments.py -q`.
   Browser print-flow tests: `node --test frontend/tests/print.test.cjs`.
 - `backend/api/inpost_shipx.py` is retained for reference but is not used by the current label flow.
