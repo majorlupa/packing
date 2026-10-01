@@ -52,12 +52,13 @@ def to_http_exception(exc: AllegroError):
 
 
 
-def auth_url() -> str:
+def auth_url(state: str) -> str:
     return (
         f"{BASE_URL}/auth/oauth/authorize"
         f"?response_type=code"
         f"&client_id={CLIENT_ID}"
         f"&redirect_uri={REDIRECT_URI}"
+        f"&state={state}"
     )
 
 
@@ -196,7 +197,7 @@ async def download_label(shipment_id: str, page_size: str = "A6") -> bytes:
         return r.content
 
 
-# Some forms can be paginated forever only in theory; a day's packing fits in one page.
+# Bound API work; reaching the cap requires an overflow probe before reporting success.
 MAX_SYNC_PAGES = 10
 
 
@@ -223,6 +224,20 @@ async def fetch_orders(limit: int = 100) -> List[Order]:
                     logger.warning("pomijam zamówienie z Allegro: %s", exc)
             if len(forms) < limit:
                 break
+        else:
+            # A full last page can mean exactly the cap or more orders. Probe one more item.
+            r = await client.get(
+                f"{API_URL}/order/checkout-forms",
+                headers=headers,
+                params={"status": "READY_FOR_PROCESSING", "limit": 1, "offset": MAX_SYNC_PAGES * limit},
+            )
+            if not r.is_success:
+                raise AllegroError(f"Allegro checkout-forms {r.status_code}: {r.text[:300]}")
+            if r.json().get("checkoutForms"):
+                raise AllegroError(
+                    f"Niepełna synchronizacja: przekroczono limit {MAX_SYNC_PAGES * limit} zamówień. "
+                    "Nie zapisano wyników tej synchronizacji."
+                )
     return orders
 
 

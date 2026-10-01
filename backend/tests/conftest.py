@@ -47,6 +47,7 @@ def app_env(tmp_path, monkeypatch):
 
     monkeypatch.setenv("PACKING_DATA_DIR", str(data_dir))
     monkeypatch.setenv("PACKING_ENV_FILE", str(env_file))
+    monkeypatch.setenv("PACKING_ACCESS_TOKEN", "test-access-token-for-packing-api-2026")
 
     for name in list(sys.modules):
         if name in PACKAGE_MODULES or name.startswith(("api.", "routes.")):
@@ -92,6 +93,10 @@ def client(app_env):
             async def go():
                 transport = httpx.ASGITransport(app=app_env.app, raise_app_exceptions=False)
                 async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+                    kwargs.setdefault("headers", {})
+                    kwargs["headers"].setdefault(
+                        "Authorization", "Bearer test-access-token-for-packing-api-2026"
+                    )
                     return await c.request(method, url, **kwargs)
 
             return asyncio.run(go())

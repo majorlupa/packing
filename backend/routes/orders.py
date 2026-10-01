@@ -1,4 +1,7 @@
+import hmac
 import os
+import secrets
+import time
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import RedirectResponse
@@ -23,6 +26,8 @@ BACKFILL_FIELDS = (
 )
 
 UI_BASE_URL = os.getenv("PACKING_BASE_URL", "http://localhost:3001")
+_oauth_state: str | None = None
+_oauth_state_deadline = 0.0
 
 
 @router.get("/", response_model=List[dict])
@@ -35,23 +40,6 @@ async def list_orders():
 async def state_status():
     """Health of the state file: whether records had to be skipped or repaired."""
     return store.state_status()
-
-
-@router.get("/debug/allegro-orders")
-async def debug_allegro_orders():
-    """Dump raw order statuses from Allegro for debugging. Contains buyer PII — local use only."""
-    token = allegro._token
-    if not token:
-        raise HTTPException(status_code=401, detail="Not authorized")
-    async with httpx.AsyncClient(timeout=allegro.REQUEST_TIMEOUT) as client:
-        r = await client.get(
-            f"{allegro.API_URL}/order/checkout-forms",
-            headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.allegro.public.v1+json"},
-            params={"limit": 20},
-        )
-        if not r.is_success:
-            raise HTTPException(status_code=502, detail=f"Allegro {r.status_code}: {r.text[:300]}")
-        return r.json()
 
 
 @router.post("/sync")
@@ -115,18 +103,28 @@ async def auth_status():
     return {"authorized": allegro._token is not None}
 
 
-@router.get("/auth/token")
-async def auth_token():
-    return {"token": allegro._token}
-
-
 @router.get("/auth/url")
 async def auth_url():
-    return {"url": allegro.auth_url()}
+    global _oauth_state, _oauth_state_deadline
+    _oauth_state = secrets.token_urlsafe(32)
+    _oauth_state_deadline = time.monotonic() + 600
+    return {"url": allegro.auth_url(_oauth_state)}
 
 
 @router.get("/auth/callback")
-async def auth_callback(code: str | None = None, error: str | None = None):
+async def auth_callback(code: str | None = None, state: str | None = None, error: str | None = None):
+    global _oauth_state, _oauth_state_deadline
+    if (
+        not state
+        or not _oauth_state
+        or time.monotonic() > _oauth_state_deadline
+        or not hmac.compare_digest(
+            state.encode("utf-8"), _oauth_state.encode("utf-8")
+        )
+    ):
+        raise HTTPException(status_code=400, detail="Nieprawidłowy lub wygasły stan autoryzacji.")
+    _oauth_state = None
+    _oauth_state_deadline = 0.0
     if error:
         raise HTTPException(status_code=400, detail=f"Allegro odrzuciło autoryzację: {error}")
     if not code:
