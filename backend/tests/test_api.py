@@ -137,6 +137,38 @@ def test_unknown_order_in_picking_list_is_404(app_env, client):
     assert client.get("/api/picking-lists").json() == []
 
 
+def test_reverted_order_is_removed_from_its_picking_list(app_env, client):
+    """Reverting one order must not leave a stale reference that start-packing revives."""
+    app_env.write_state(app_env.default_state({
+        "o-1": sample_order("o-1", "a-1"),
+        "o-2": sample_order("o-2", "a-2"),
+    }))
+    pl = client.post("/api/picking-lists", json={"name": "", "order_ids": ["o-1", "o-2"]}).json()
+
+    assert client.post("/api/orders/o-2/revert-pending").status_code == 200
+    lists = client.get("/api/picking-lists").json()
+    assert lists[0]["order_ids"] == ["o-1"]
+
+    assert client.post(f"/api/picking-lists/{pl['id']}/start-packing").status_code == 200
+    statuses = {o["id"]: o["status"] for o in client.get("/api/orders/").json()}
+    assert statuses == {"o-1": "packing", "o-2": "pending"}
+
+
+def test_order_moved_to_a_new_picking_list_leaves_the_old_one(app_env, client):
+    app_env.write_state(app_env.default_state({"o-1": sample_order()}))
+    first = client.post("/api/picking-lists", json={"name": "A", "order_ids": ["o-1"]}).json()
+    second = client.post("/api/picking-lists", json={"name": "B", "order_ids": ["o-1"]}).json()
+
+    # The empty first list is dropped and the order points at the second one only.
+    assert [pl["id"] for pl in client.get("/api/picking-lists").json()] == [second["id"]]
+    assert client.get("/api/orders/").json()[0]["picking_list_id"] == second["id"]
+    assert first["id"] != second["id"]
+
+    # Reverting the whole second list still returns the order to pending.
+    assert client.post(f"/api/picking-lists/{second['id']}/revert").status_code == 200
+    assert client.get("/api/orders/").json()[0]["status"] == "pending"
+
+
 # ---------------------------------------------------------------- settings
 
 
