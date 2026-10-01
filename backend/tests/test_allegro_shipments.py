@@ -127,3 +127,76 @@ def test_label_download_rejects_non_pdf(shipment_api, content):
     install(lambda request: httpx.Response(200, content=content))
     with pytest.raises(allegro.AllegroError, match='PDF'):
         asyncio.run(allegro.download_label('shipment-1'))
+
+
+@pytest.mark.parametrize('create_body, status_body', [
+    (None, None),                                        # 201 carrying an HTML proxy page
+    ({'commandId': 'command-1'}, None),                  # poll answered with HTML
+    ({'commandId': 'command-1'}, {'status': 'SUCCESS'}),  # SUCCESS without shipmentId
+    ({'commandId': 'command-1'}, {'status': 'ERROR', 'errors': [{'code': None}]}),
+    ({'commandId': 'command-1'}, {'status': 'ERROR', 'errors': [None]}),
+    ({'commandId': 'command-1'}, {'status': 'ERROR', 'errors': None}),
+])
+def test_malformed_allegro_responses_raise_allegro_error(shipment_api, create_body, status_body):
+    """An HTML error page or a changed payload shape must be a 502, never an unhandled 500."""
+    allegro, order, install = shipment_api
+
+    def handler(request):
+        if request.url.path.endswith('/delivery-proposals/a-1'):
+            return httpx.Response(200, json=proposal())
+        if request.method == 'POST':
+            if create_body is None:
+                return httpx.Response(201, text='<html>bad gateway</html>')
+            return httpx.Response(201, json=create_body)
+        if status_body is None:
+            return httpx.Response(200, text='<html>bad gateway</html>')
+        return httpx.Response(200, json=status_body)
+
+    install(handler)
+    with pytest.raises(allegro.AllegroError):
+        asyncio.run(allegro.create_shipment(order, {}, {}))
+
+
+def test_label_route_runs_the_real_allegro_flow(app_env, client, monkeypatch):
+    """Route + real client: proposal, create with operator dimensions, poll, label PDF."""
+    import api.allegro as allegro
+
+    app_env.write_state(app_env.default_state({'o-1': sample_order('o-1', 'a-1')}))
+    allegro._token = 'test-token'
+    posted = {}
+
+    def handler(request):
+        if request.url.path.endswith('/delivery-proposals/a-1'):
+            return httpx.Response(200, json=proposal())
+        if request.method == 'POST' and request.url.path.endswith('/create-commands'):
+            posted.update(json.loads(request.content)['input'])
+            return httpx.Response(201, json={'commandId': 'command-1'})
+        if request.url.path.endswith('/create-commands/command-1'):
+            return httpx.Response(200, json={'status': 'SUCCESS', 'shipmentId': 'shipment-1'})
+        if request.url.path.endswith('/shipment-management/label'):
+            posted['label'] = json.loads(request.content)
+            return httpx.Response(200, content=b'%PDF-1.7 label')
+        raise AssertionError(f'unexpected {request.method} {request.url}')
+
+    async def no_wait(_seconds):
+        pass
+
+    monkeypatch.setattr(allegro.asyncio, 'sleep', no_wait)
+    original_client = httpx.AsyncClient
+
+    def client_factory(**kwargs):
+        # The test HTTP client passes its own ASGI transport; Allegro calls get the mock.
+        kwargs.setdefault('transport', httpx.MockTransport(handler))
+        return original_client(**kwargs)
+
+    monkeypatch.setattr(allegro.httpx, 'AsyncClient', client_factory)
+
+    response = client.get('/api/print/orders/o-1/label?length=40&width=30&height=20&weight=2.5')
+    assert response.status_code == 200
+    assert response.headers['content-type'] == 'application/pdf'
+    assert response.content.startswith(b'%PDF-')
+    assert posted['labelFormat'] == 'PDF'
+    assert posted['packages'][0]['length']['value'] == 40
+    assert posted['label']['pageSize'] == 'A6'
+    state = json.loads(app_env.state_file.read_text(encoding='utf-8'))
+    assert state['orders']['o-1']['shipment_id'] == 'shipment-1'
