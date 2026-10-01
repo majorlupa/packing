@@ -182,15 +182,37 @@ async def exchange_code(code: str):
         _store_token(r.json())
 
 
+def _error_messages(errors: object) -> str:
+    """Join Allegro error entries, tolerating nulls, missing fields and odd shapes."""
+    if not isinstance(errors, list):
+        return ""
+    messages = [
+        entry.get("userMessage") or entry.get("message") or entry.get("code")
+        for entry in errors
+        if isinstance(entry, dict)
+    ]
+    return "; ".join(message for message in messages if isinstance(message, str))[:1000]
+
+
 def _shipment_error(response: httpx.Response) -> str:
     """Prefer actionable Allegro errors without dumping a response containing addresses."""
     try:
-        errors = response.json().get("errors", [])
-        messages = [e.get("userMessage") or e.get("message") or e.get("code") for e in errors]
-        detail = "; ".join(message for message in messages if isinstance(message, str))
-    except (ValueError, AttributeError, TypeError):
-        detail = ""
-    return detail[:1000] or "Sprawdź ustawienia Wysyłam z Allegro i uprawnienia aplikacji do przesyłek."
+        payload = response.json()
+    except ValueError:
+        payload = None
+    detail = _error_messages(payload.get("errors")) if isinstance(payload, dict) else ""
+    return detail or "Sprawdź ustawienia Wysyłam z Allegro i uprawnienia aplikacji do przesyłek."
+
+
+def _json_object(response: httpx.Response, what: str) -> dict:
+    """Parse an Allegro body; a gateway HTML page must become a 502, not a 500."""
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise AllegroError(f"Allegro zwróciło nieprawidłowe dane ({what}).") from exc
+    if not isinstance(payload, dict):
+        raise AllegroError(f"Allegro zwróciło nieprawidłowe dane ({what}).")
+    return payload
 
 
 async def create_shipment(order, sender: dict, package: dict) -> str:
@@ -215,10 +237,7 @@ async def create_shipment(order, sender: dict, package: dict) -> str:
                 f"Nie udało się pobrać danych wysyłki z Allegro ({proposal.status_code}). "
                 f"{_shipment_error(proposal)}"
             )
-        try:
-            suggested = proposal.json().get("suggestedInput")
-        except (ValueError, AttributeError) as exc:
-            raise AllegroError("Allegro zwróciło nieprawidłowe dane wysyłki.") from exc
+        suggested = _json_object(proposal, "propozycje wysyłki").get("suggestedInput")
         if not isinstance(suggested, dict):
             raise AllegroError("Allegro nie zwróciło proponowanych danych wysyłki.")
         if not isinstance(suggested.get("sender"), dict) or not suggested["sender"]:
@@ -252,8 +271,8 @@ async def create_shipment(order, sender: dict, package: dict) -> str:
         )
         if not r.is_success:
             raise AllegroError(f"Allegro create shipment {r.status_code}: {_shipment_error(r)}")
-        command_id = r.json().get("commandId")
-        if not command_id:
+        command_id = _json_object(r, "utworzenie przesyłki").get("commandId")
+        if not isinstance(command_id, str) or not command_id:
             raise AllegroError("Brak commandId w odpowiedzi Allegro.")
 
         # Poll for result
@@ -268,13 +287,15 @@ async def create_shipment(order, sender: dict, package: dict) -> str:
             )
             if not r.is_success:
                 raise AllegroError(f"Allegro shipment status {r.status_code}: {r.text[:300]}")
-            data = r.json()
+            data = _json_object(r, "status przesyłki")
             status = data.get("status")
             if status == "SUCCESS":
-                return data["shipmentId"]
+                shipment_id = data.get("shipmentId")
+                if not isinstance(shipment_id, str) or not shipment_id:
+                    raise AllegroError("Allegro nie zwróciło identyfikatora utworzonej przesyłki.")
+                return shipment_id
             if status == "ERROR":
-                errors = data.get("errors", [])
-                msg = "; ".join(e.get("userMessage") or e.get("message") or e.get("code", "unknown") for e in errors) or "unknown"
+                msg = _error_messages(data.get("errors")) or "unknown"
                 raise AllegroError(f"Allegro shipment creation failed: {msg}")
 
     raise AllegroError("Przekroczono czas oczekiwania na utworzenie przesyłki.")
