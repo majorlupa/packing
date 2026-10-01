@@ -56,7 +56,7 @@ def _load_stored_token() -> None:
         return
     try:
         data = json.loads(TOKEN_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return
     if not isinstance(data, dict):
         return

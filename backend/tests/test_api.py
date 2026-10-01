@@ -554,6 +554,7 @@ def test_persisted_token_makes_auth_status_authorized(app_env, client):
 
 
 @pytest.mark.parametrize("payload", [
+    b"\xff",
     [],
     None,
     {"access_token": "x", "expires_at": "invalid"},
@@ -564,7 +565,8 @@ def test_persisted_token_makes_auth_status_authorized(app_env, client):
 def test_invalid_persisted_session_requires_reauthorization(app_env, client, payload):
     import api.allegro as allegro
 
-    (app_env.data_dir / "allegro_token.json").write_text(json.dumps(payload), encoding="utf-8")
+    content = payload if isinstance(payload, bytes) else json.dumps(payload).encode("utf-8")
+    (app_env.data_dir / "allegro_token.json").write_bytes(content)
     assert client.get("/api/orders/auth/status").json() == {"authorized": False}
     with pytest.raises(allegro.AllegroNotAuthorized):
         asyncio.run(allegro._access_token())
