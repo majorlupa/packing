@@ -7,6 +7,7 @@ unvalidated settings body bricking a settings tab, and a rename requiring order_
 import asyncio
 import json
 import threading
+import time
 
 import httpx
 import pytest
@@ -469,3 +470,104 @@ def test_env_roundtrip(app_env, client):
 
     assert client.post("/api/config/", json={"content": "X=1\n"}).status_code == 200
     assert client.get("/api/config/").json()["content"] == "X=1\n"
+
+
+# ---------------------------------------------------------------- Allegro auth
+
+
+class _FakeTokenResponse:
+    def __init__(self, payload, status_code=200):
+        self._payload = payload
+        self.status_code = status_code
+        self.is_success = status_code < 400
+        self.text = ""
+
+    def json(self):
+        return self._payload
+
+
+def _fake_token_client(monkeypatch, responses):
+    """Patch httpx.AsyncClient so token calls never leave the process."""
+    import api.allegro as allegro
+
+    calls = []
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, data=None, auth=None, **kwargs):
+            calls.append(data)
+            return responses[data["grant_type"]]
+
+    monkeypatch.setattr(allegro.httpx, "AsyncClient", lambda **kwargs: FakeClient())
+    return calls
+
+
+def test_tokens_survive_a_restart_and_refresh_before_expiry(app_env, monkeypatch):
+    import api.allegro as allegro
+
+    calls = _fake_token_client(monkeypatch, {
+        "authorization_code": _FakeTokenResponse({"access_token": "first", "refresh_token": "r1", "expires_in": 3600}),
+        "refresh_token": _FakeTokenResponse({"access_token": "second", "refresh_token": "r2", "expires_in": 3600}),
+    })
+
+    asyncio.run(allegro.exchange_code("code"))
+    token_file = app_env.data_dir / "allegro_token.json"
+    assert json.loads(token_file.read_text(encoding="utf-8"))["refresh_token"] == "r1"
+
+    # Container restart: the process forgets everything, the volume keeps the token.
+    allegro._token = allegro._refresh_token = None
+    allegro._expires_at = 0.0
+    assert asyncio.run(allegro._access_token()) == "first"
+    assert len(calls) == 1  # restart alone must not trigger a refresh
+
+    # Near expiry the refresh token is used, and the new pair is persisted.
+    allegro._expires_at = time.time() - 1
+    assert asyncio.run(allegro._access_token()) == "second"
+    assert calls[-1]["grant_type"] == "refresh_token"
+    assert json.loads(token_file.read_text(encoding="utf-8"))["refresh_token"] == "r2"
+
+
+def test_rejected_refresh_token_forgets_the_session(app_env, monkeypatch):
+    import api.allegro as allegro
+
+    _fake_token_client(monkeypatch, {
+        "refresh_token": _FakeTokenResponse({"error": "invalid_grant"}, status_code=400),
+    })
+
+    token_file = app_env.data_dir / "allegro_token.json"
+    token_file.write_text(
+        json.dumps({"access_token": "old", "refresh_token": "r1", "expires_at": time.time() - 10}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(allegro.AllegroNotAuthorized):
+        asyncio.run(allegro._access_token())
+    assert not token_file.exists()
+    assert allegro.is_authorized() is False
+
+
+def test_persisted_token_makes_auth_status_authorized(app_env, client):
+    (app_env.data_dir / "allegro_token.json").write_text(
+        json.dumps({"access_token": "x", "refresh_token": "r", "expires_at": time.time() + 3600}),
+        encoding="utf-8",
+    )
+    assert client.get("/api/orders/auth/status").json() == {"authorized": True}
+
+
+def test_auth_url_state_is_single_use(app_env):
+    import api.allegro as allegro
+
+    state = allegro.auth_url().split("state=")[1]
+    assert allegro.check_state(state) is True
+    assert allegro.check_state(state) is False  # consumed
+    assert allegro.check_state("someone-elses") is False
+
+    # A restart between "Autoryzuj" and the callback clears both; the flow still works.
+    allegro._pending_states.clear()
+    allegro._auth_started = False
+    assert allegro.check_state(None) is True

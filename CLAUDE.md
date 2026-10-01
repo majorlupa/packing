@@ -46,6 +46,9 @@ It runs against a temporary data directory and never calls Allegro.
   `/api/orders/status`) so one bad record cannot take the whole queue down.
 - Do not rename-replace `/app/.env`: it is bind-mounted as a single file, so `os.replace()`
   fails with `EBUSY`. `routes/config.py` writes it in place for that reason.
+- Allegro OAuth tokens are persisted to `data/allegro_token.json` (mode 0600) together with
+  the access-token expiry, and refreshed automatically, so a container restart does not require
+  re-authorizing.
 
 ## Application workflow
 
