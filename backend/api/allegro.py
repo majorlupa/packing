@@ -182,65 +182,65 @@ async def exchange_code(code: str):
         _store_token(r.json())
 
 
+def _shipment_error(response: httpx.Response) -> str:
+    """Prefer actionable Allegro errors without dumping a response containing addresses."""
+    try:
+        errors = response.json().get("errors", [])
+        messages = [e.get("userMessage") or e.get("message") or e.get("code") for e in errors]
+        detail = "; ".join(message for message in messages if isinstance(message, str))
+    except (ValueError, AttributeError, TypeError):
+        detail = ""
+    return detail[:1000] or "Sprawdź ustawienia Wysyłam z Allegro i uprawnienia aplikacji do przesyłek."
+
+
 async def create_shipment(order, sender: dict, package: dict) -> str:
     """Create a shipment via Allegro shipment management. Returns shipment UUID."""
     token = await _access_token()
 
-    delivery_method_id = order.delivery_method_id
-    if not delivery_method_id:
-        # Fetch directly from Allegro if not stored
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as _c:
-            _r = await _c.get(
-                f"{API_URL}/order/checkout-forms/{order.allegro_id}",
-                headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.allegro.public.v1+json"},
-            )
-            if _r.is_success:
-                form = _r.json()
-                delivery_method_id = form.get("delivery", {}).get("method", {}).get("id")
-                print(f"[shipment] checkout-form method id={delivery_method_id}", flush=True)
-            else:
-                print(f"[shipment] checkout-form fetch failed {_r.status_code}", flush=True)
-    if not delivery_method_id:
-        raise AllegroError("Brak delivery_method_id — kurier nieznany. Sprawdź czy zamówienie ma wybraną metodę dostawy.")
-    if not sender.get("street"):
-        raise AllegroError("Brak adresu nadawcy. Uzupełnij dane w Ustawienia → Wysyłka.")
-
-    payload = {
-        "input": {
-            "deliveryMethodId": delivery_method_id,
-            "sender": {
-                "name": sender.get("name") or None,
-                "company": sender.get("company") or None,
-                "street": sender["street"],
-                "postalCode": sender["postal_code"],
-                "city": sender["city"],
-                "countryCode": sender.get("country_code", "PL"),
-                "email": sender["email"],
-                "phone": sender["phone"],
-            },
-            "receiver": {
-                "name": order.buyer_name or None,
-                "street": order.buyer_street or "",
-                "postalCode": order.buyer_postal_code or "",
-                "city": order.buyer_city or "",
-                "countryCode": order.buyer_country or "PL",
-                "email": order.buyer_email or "",
-                "phone": order.buyer_phone or "",
-            },
-            "packages": [{
-                "type": package.get("type", "PACKAGE"),
-                "length": {"value": package.get("length", 30), "unit": "CENTIMETER"},
-                "width":  {"value": package.get("width",  20), "unit": "CENTIMETER"},
-                "height": {"value": package.get("height", 15), "unit": "CENTIMETER"},
-                "weight": {"value": str(package.get("weight", 1.0)), "unit": "KILOGRAMS"},
-            }],
-            "labelFormat": package.get("label_format", "PDF"),
-        }
+    # The legacy sender argument is retained for callers/settings compatibility.
+    # Allegro owns sender/recipient addresses, pickup points, COD and carrier settings.
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.allegro.public.v1+json",
     }
-    if package.get("label_format", "PDF") == "PDF":
-        payload["input"]["pageSize"] = package.get("page_size", "A6")
-
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        proposal = await client.get(
+            f"{API_URL}/shipment-management/delivery-proposals/{order.allegro_id}",
+            headers=headers,
+        )
+        if proposal.status_code == 401:
+            raise AllegroNotAuthorized("Sesja Allegro wygasła. Kliknij 'Autoryzuj Allegro'.")
+        if not proposal.is_success:
+            raise AllegroError(
+                f"Nie udało się pobrać danych wysyłki z Allegro ({proposal.status_code}). "
+                f"{_shipment_error(proposal)}"
+            )
+        try:
+            suggested = proposal.json().get("suggestedInput")
+        except (ValueError, AttributeError) as exc:
+            raise AllegroError("Allegro zwróciło nieprawidłowe dane wysyłki.") from exc
+        if not isinstance(suggested, dict):
+            raise AllegroError("Allegro nie zwróciło proponowanych danych wysyłki.")
+        if not isinstance(suggested.get("sender"), dict) or not suggested["sender"]:
+            raise AllegroError(
+                "Brak danych nadawcy w Allegro. Dodaj domyślny adres w książce adresowej "
+                "Wysyłam z Allegro, a następnie spróbuj ponownie."
+            )
+        receiver = suggested.get("receiver")
+        if not isinstance(receiver, dict) or not receiver.get("email"):
+            raise AllegroError("Allegro nie zwróciło danych odbiorcy z adresem e-mail zamówienia.")
+
+        shipment_input = dict(suggested)
+        shipment_input["packages"] = [{
+            "type": package.get("type", "PACKAGE"),
+            "length": {"value": package.get("length", 30), "unit": "CENTIMETER"},
+            "width": {"value": package.get("width", 20), "unit": "CENTIMETER"},
+            "height": {"value": package.get("height", 15), "unit": "CENTIMETER"},
+            "weight": {"value": package.get("weight", 1.0), "unit": "KILOGRAMS"},
+        }]
+        # The browser prints PDFs. Page size belongs to the label-download request.
+        shipment_input["labelFormat"] = "PDF"
+        payload = {"input": shipment_input}
         r = await client.post(
             f"{API_URL}/shipment-management/shipments/create-commands",
             headers={
@@ -251,7 +251,7 @@ async def create_shipment(order, sender: dict, package: dict) -> str:
             json=payload,
         )
         if not r.is_success:
-            raise AllegroError(f"Allegro create shipment {r.status_code}: {r.text[:300]}")
+            raise AllegroError(f"Allegro create shipment {r.status_code}: {_shipment_error(r)}")
         command_id = r.json().get("commandId")
         if not command_id:
             raise AllegroError("Brak commandId w odpowiedzi Allegro.")
@@ -274,7 +274,7 @@ async def create_shipment(order, sender: dict, package: dict) -> str:
                 return data["shipmentId"]
             if status == "ERROR":
                 errors = data.get("errors", [])
-                msg = errors[0].get("message", "unknown") if errors else "unknown"
+                msg = "; ".join(e.get("userMessage") or e.get("message") or e.get("code", "unknown") for e in errors) or "unknown"
                 raise AllegroError(f"Allegro shipment creation failed: {msg}")
 
     raise AllegroError("Przekroczono czas oczekiwania na utworzenie przesyłki.")
@@ -297,6 +297,11 @@ async def download_label(shipment_id: str, page_size: str = "A6") -> bytes:
             raise AllegroError("Allegro nie ma jeszcze etykiety dla tej przesyłki.")
         if not r.is_success:
             raise AllegroError(f"Allegro label API {r.status_code}: {r.text[:300]}")
+        if not r.content.startswith(b"%PDF-"):
+            raise AllegroError(
+                "Allegro zwróciło etykietę w formacie innym niż PDF. "
+                "Istniejącą etykietę ZPL pobierz w Wysyłam z Allegro; nowe etykiety w aplikacji są PDF."
+            )
         return r.content
 
 

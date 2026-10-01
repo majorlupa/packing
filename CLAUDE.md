@@ -72,7 +72,13 @@ may only be created once, so a double click must not create two.
   A restart preserves the session, but invalidates any unfinished OAuth authorization flow.
 
 - Allegro uses OAuth2 authorization-code flow.
-- Shipment labels use Allegro Shipment Management.
+- Shipment labels use Allegro Shipment Management. Sender/recipient addresses, pickup points,
+  COD and insurance come from `GET /shipment-management/delivery-proposals/{orderId}`.
+  Set the sender address in Allegro's address book; legacy local sender settings are ignored.
+  The packing view controls parcel dimensions/weight. New labels are always PDF; A4/A6 is
+  applied at download time. Existing shipment IDs are reused on subsequent print attempts.
+- Shipment HTTP contract tests: `python -m pytest backend/tests/test_allegro_shipments.py -q`.
+  Browser print-flow tests: `node --test frontend/tests/print.test.cjs`.
 - `backend/api/inpost_shipx.py` is retained for reference but is not used by the current label flow.
 - The OAuth callback targets `http://localhost:3001/api/orders/auth/callback` by default; override
   with `ALLEGRO_REDIRECT_URI` and `PACKING_BASE_URL` (see `.env.example`).
