@@ -122,6 +122,7 @@ def _checkout_form(allegro_id):
 def _fake_checkout_client(monkeypatch, pages):
     """Serve {offset: [forms]} so pagination can be tested without the network."""
     import api.allegro as allegro
+    real_client = httpx.AsyncClient
 
     class FakeResponse:
         is_success = True
@@ -148,7 +149,11 @@ def _fake_checkout_client(monkeypatch, pages):
             return FakeResponse(pages.get(params["offset"], []))
 
     fake = FakeClient()
-    monkeypatch.setattr(allegro.httpx, "AsyncClient", lambda **kwargs: fake)
+
+    def client_factory(**kwargs):
+        return real_client(**kwargs) if "transport" in kwargs else fake
+
+    monkeypatch.setattr(allegro.httpx, "AsyncClient", client_factory)
     allegro._token = "test-token"
     return fake
 
@@ -175,6 +180,35 @@ def test_fetch_orders_skips_a_malformed_line_item(app_env, monkeypatch):
 
 
 # ---------------------------------------------------------------- request contracts
+
+
+def test_sync_refuses_truncated_results_without_mutating_state(app_env, client, monkeypatch):
+    import api.allegro as allegro
+
+    monkeypatch.setattr(allegro, "MAX_SYNC_PAGES", 2)
+    pages = {
+        0: [_checkout_form(f"a-{i}") for i in range(100)],
+        100: [_checkout_form(f"a-{i}") for i in range(100, 200)],
+        200: [_checkout_form("a-overflow")],
+    }
+    fake = _fake_checkout_client(monkeypatch, pages)
+    app_env.write_state(app_env.default_state({"existing": sample_order("existing", "existing")}))
+    before = app_env.state_file.read_bytes()
+    response = client.post("/api/orders/sync")
+    assert response.status_code == 502
+    assert "Niepełna synchronizacja" in response.json()["detail"]
+    assert fake.offsets == [0, 100, 200]
+    assert app_env.state_file.read_bytes() == before
+
+
+def test_full_final_page_is_complete_when_overflow_probe_is_empty(app_env, monkeypatch):
+    import api.allegro as allegro
+
+    monkeypatch.setattr(allegro, "MAX_SYNC_PAGES", 1)
+    fake = _fake_checkout_client(monkeypatch, {0: [_checkout_form("a-1"), _checkout_form("a-2")]})
+    orders = asyncio.run(allegro.fetch_orders(limit=2))
+    assert [order.allegro_id for order in orders] == ["a-1", "a-2"]
+    assert fake.offsets == [0, 2]
 
 
 def test_rename_needs_only_the_name(app_env, client):
@@ -440,8 +474,14 @@ def test_two_parallel_label_requests_create_one_shipment(app_env, monkeypatch):
         transport = httpx.ASGITransport(app=app_env.app, raise_app_exceptions=False)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             return await asyncio.gather(
-                c.get("/api/print/orders/o-1/label"),
-                c.get("/api/print/orders/o-1/label"),
+                c.get(
+                    "/api/print/orders/o-1/label",
+                    headers={"Authorization": "Bearer test-access-token-for-packing-api-2026"},
+                ),
+                c.get(
+                    "/api/print/orders/o-1/label",
+                    headers={"Authorization": "Bearer test-access-token-for-packing-api-2026"},
+                ),
             )
 
     responses = asyncio.run(go())
@@ -525,15 +565,3 @@ def test_custom_doc_upload_and_delete(app_env, client):
 
 def test_missing_order_invoice_is_404(client):
     assert client.get("/api/print/orders/ghost/invoice").status_code == 404
-
-
-# ---------------------------------------------------------------- config (.env)
-
-
-def test_env_roundtrip(app_env, client):
-    original = client.get("/api/config/")
-    assert original.status_code == 200
-    assert "ALLEGRO_CLIENT_ID" in original.json()["content"]
-
-    assert client.post("/api/config/", json={"content": "X=1\n"}).status_code == 200
-    assert client.get("/api/config/").json()["content"] == "X=1\n"

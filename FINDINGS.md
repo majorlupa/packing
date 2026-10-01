@@ -16,7 +16,8 @@ The previous deployment used an Nginx frontend container and a FastAPI backend c
 - `Dockerfile` builds Python dependencies and copies both backend and frontend.
 - FastAPI serves `/` and `/static` directly.
 - The API is mounted at `/api`, preserving the existing frontend URLs.
-- `docker-compose.yaml` exposes port 3001 and keeps the data and `.env` mounts.
+- `docker-compose.yaml` binds port 3001 to localhost, loads `.env` with Compose `env_file`,
+  and mounts only the data directory.
 
 The image was built successfully and smoke-tested for `/`, `/health`, and `/api/orders/`.
 
@@ -26,14 +27,14 @@ The old `frontend/Dockerfile` and `frontend/nginx.conf` remain as legacy files b
 
 ### High priority
 
-- `/api/orders/auth/token` returns the live Allegro bearer token to the browser. Remove this endpoint immediately.
-- `/api/orders/debug/allegro-orders` exposes raw order data, including buyer personally identifiable information. Restrict or remove it.
-- Configuration endpoints allow unauthenticated reading and writing of `.env`. Add authentication and validation before exposing them outside a trusted local network.
+- **Fixed (2026-10-01):** Removed the Allegro token-return, raw-order debug, and `.env` read/write endpoints.
+- **Fixed (2026-10-01):** All `/api/` routes require `PACKING_ACCESS_TOKEN`; the OAuth callback is exempt and validates a one-time `state` value.
+- **Fixed (2026-10-01):** Compose binds port 3001 to localhost, and `.env` is no longer mounted into the container filesystem.
 
 ### Medium priority
 
 - OAuth tokens are held only in process memory. Restarting the container loses authorization; there is no refresh-token or expiry handling. **Still open.**
-- OAuth uses a hardcoded localhost callback and does not use `state` or PKCE. **Partly fixed** (callback is configurable, `state`/PKCE still missing).
+- OAuth callback remains configurable; one-time `state` validation is now enabled. **PKCE is still missing.**
 - Synchronization requests at most 100 `READY_FOR_PROCESSING` orders and does not use Allegro event cursors or pagination, so orders can be missed. **Still open.**
 - Allegro requests have no retry/backoff strategy. **Still open** (timeouts and error classes were added).
 - `tracking_number` is displayed by the UI but is never populated by the current sync flow. **Still open** — the UI no longer keys its "no label" warning on it.
@@ -62,7 +63,7 @@ Official references:
 
 ## Recommended next steps
 
-1. Remove token/raw-debug endpoints and protect configuration routes. **Still open — needs your decision (see below).**
+1. Rotate any Allegro and InPost credentials that may have been exposed while the old API was reachable. **Operator action required in the provider dashboards.**
 2. Persist encrypted OAuth credentials with refresh and expiry handling. **Still open.**
 3. Replace 100-item polling with event-based incremental synchronization and pagination. **Still open.**
 4. Add request retries, timeouts, and structured Allegro error handling. **Partly done:** timeouts, typed errors and correct status codes; no retries yet.
@@ -100,10 +101,3 @@ Verified by building the image, running the container and driving the API end-to
    silently re-rendering; the label button only reports success after the PDF arrives; API values
    are escaped before they reach `innerHTML`; the packing view seeds its dimensions from the
    shipping settings, which are now editable and actually used.
-
-## Open, needs your decision
-
-- `/api/config/` (reads and writes `.env`) and `/api/orders/auth/token` (returns the live bearer
-  token) are unauthenticated, and Compose publishes port 3001 on every interface. Nothing was
-  changed here because it depends on how you reach the app: warehouse LAN, or only this machine.
-  Options: bind `127.0.0.1:3001:3001` in Compose, or add a shared token for those two routes.

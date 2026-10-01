@@ -13,7 +13,7 @@ RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 COPY backend /app/backend
 COPY frontend /app/frontend
 
-# Run as the host user's uid/gid (1000) so the mounted ./data and ./.env stay writable
+# Run as the host user's uid/gid (1000) so the mounted ./data stays writable
 # by the operator instead of becoming root-owned.
 RUN groupadd --gid 1000 packing && useradd --uid 1000 --gid 1000 --no-create-home packing \
     && mkdir -p /app/data && chown -R packing:packing /app
