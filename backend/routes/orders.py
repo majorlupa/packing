@@ -112,7 +112,7 @@ async def get_archive():
 
 @router.get("/auth/status")
 async def auth_status():
-    return {"authorized": allegro._token is not None}
+    return {"authorized": allegro.is_authorized()}
 
 
 @router.get("/auth/token")
@@ -126,9 +126,11 @@ async def auth_url():
 
 
 @router.get("/auth/callback")
-async def auth_callback(code: str | None = None, error: str | None = None):
+async def auth_callback(code: str | None = None, error: str | None = None, state: str | None = None):
     if error:
         raise HTTPException(status_code=400, detail=f"Allegro odrzuciło autoryzację: {error}")
+    if not allegro.check_state(state):
+        raise HTTPException(status_code=400, detail="Nieprawidłowy parametr 'state' w callbacku Allegro.")
     if not code:
         raise HTTPException(status_code=400, detail="Brak parametru 'code' w callbacku Allegro.")
     try:
