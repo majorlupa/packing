@@ -9,9 +9,9 @@ refreshed with the refresh token once it is close to expiry.
 """
 import json
 import logging
+import math
 import os
 import asyncio
-import secrets
 import time
 import httpx
 from typing import List
@@ -39,10 +39,6 @@ _refresh_token: str | None = None
 _expires_at: float = 0.0
 # Refresh must not run twice in parallel for one expiry.
 _token_lock = asyncio.Lock()
-# OAuth `state` values handed out by auth_url(). In memory on purpose: a restart
-# invalidates the URL, and the operator just clicks "Autoryzuj" again.
-_pending_states: set[str] = set()
-_auth_started = False
 
 
 class AllegroError(RuntimeError):
@@ -62,9 +58,22 @@ def _load_stored_token() -> None:
         data = json.loads(TOKEN_FILE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return
-    _token = data.get("access_token")
-    _refresh_token = data.get("refresh_token")
-    _expires_at = float(data.get("expires_at") or 0.0)
+    if not isinstance(data, dict):
+        return
+    access_token = data.get("access_token")
+    refresh_token = data.get("refresh_token")
+    if any(value is not None and (not isinstance(value, str) or not value.strip())
+           for value in (access_token, refresh_token)):
+        return
+    try:
+        expires_at = float(data.get("expires_at") or 0.0)
+    except (TypeError, ValueError, OverflowError):
+        return
+    if not math.isfinite(expires_at) or expires_at < 0:
+        return
+    _token = access_token
+    _refresh_token = refresh_token
+    _expires_at = expires_at
 
 
 def _store_token(payload: dict) -> None:
@@ -147,11 +156,7 @@ def to_http_exception(exc: AllegroError):
 
 
 
-def auth_url() -> str:
-    global _auth_started
-    _auth_started = True
-    state = secrets.token_urlsafe(24)
-    _pending_states.add(state)
+def auth_url(state: str) -> str:
     return (
         f"{BASE_URL}/auth/oauth/authorize"
         f"?response_type=code"
@@ -159,14 +164,6 @@ def auth_url() -> str:
         f"&redirect_uri={REDIRECT_URI}"
         f"&state={state}"
     )
-
-
-def check_state(state: str | None) -> bool:
-    """Verify the OAuth `state` and consume it; a restart mid-flow passes (no state issued)."""
-    if state and state in _pending_states:
-        _pending_states.discard(state)
-        return True
-    return not _auth_started and not _pending_states
 
 
 async def exchange_code(code: str):

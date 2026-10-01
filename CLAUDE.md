@@ -19,7 +19,11 @@ docker compose build packing
 docker compose up -d
 ```
 
-The Compose service mounts `./data` for persistent state and `./.env` for credentials. Keep credentials out of version control. `.dockerignore` keeps both out of the build context.
+The Compose service mounts `./data` for persistent state, loads credentials from the host
+`.env` through `env_file`, and binds port 3001 to localhost. Keep `.env` mode 0600 and out
+of version control; `.dockerignore` keeps it and `data/` out of the build context.
+Set `PACKING_ACCESS_TOKEN` to a random value of at least 32 characters (see `.env.example`).
+The browser asks for that token when opening the app and holds it only for the page session.
 
 The FastAPI application serves the frontend at `/`, static assets at `/static`, and API routes below `/api`.
 
@@ -44,11 +48,9 @@ It runs against a temporary data directory and never calls Allegro.
   `degraded`) instead of a bare 500 per request; the UI shows it as a banner.
 - Records that fail validation are quarantined (kept in the file, reported by
   `/api/orders/status`) so one bad record cannot take the whole queue down.
-- Do not rename-replace `/app/.env`: it is bind-mounted as a single file, so `os.replace()`
-  fails with `EBUSY`. `routes/config.py` writes it in place for that reason.
-- Allegro OAuth tokens are persisted to `data/allegro_token.json` (mode 0600) together with
-  the access-token expiry, and refreshed automatically, so a container restart does not require
-  re-authorizing.
+- Keep `.env` on the host and pass it to the container with Compose `env_file`; do not expose
+  it through an application endpoint. The API requires `PACKING_ACCESS_TOKEN` for all routes
+  under `/api/`, and Compose binds the web port to localhost.
 
 ## Application workflow
 
@@ -65,6 +67,9 @@ Label creation is serialised per order (`routes/print_routes.py`): a shipment co
 may only be created once, so a double click must not create two.
 
 ## Integration notes
+
+- Allegro access and refresh tokens are persisted to `data/allegro_token.json` (mode 0600).
+  A restart preserves the session, but invalidates any unfinished OAuth authorization flow.
 
 - Allegro uses OAuth2 authorization-code flow.
 - Shipment labels use Allegro Shipment Management.
