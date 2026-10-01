@@ -1,6 +1,37 @@
 const API = '/api';
+let accessToken = '';
+let accessTokenPrompt = null;
 
-// Escape every value that came from the API (Allegro data, settings, .env) before it
+async function promptForAccessToken() {
+  if (accessToken) return accessToken;
+  if (!accessTokenPrompt) {
+    accessTokenPrompt = Promise.resolve().then(() => {
+      const entered = window.prompt('Podaj PACKING_ACCESS_TOKEN z pliku .env:');
+      if (!entered || !entered.trim()) throw new Error('Token dostępu jest wymagany.');
+      accessToken = entered.trim();
+      return accessToken;
+    }).finally(() => { accessTokenPrompt = null; });
+  }
+  return accessTokenPrompt;
+}
+
+async function apiFetch(path, options = {}) {
+  const send = token => {
+    const headers = new Headers(options.headers || {});
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+    return fetch(`${API}${path}`, { ...options, headers });
+  };
+
+  let res = await send(accessToken);
+  if (res.status !== 401 || res.headers.get('X-Packing-Auth-Required') !== '1') return res;
+
+  const token = await promptForAccessToken();
+  res = await send(token);
+  if (res.status === 401 && res.headers.get('X-Packing-Auth-Required') === '1') accessToken = '';
+  return res;
+}
+
+// Escape every value that came from the API (Allegro data and settings) before it
 // reaches innerHTML. Allegro product names and buyer fields are untrusted input.
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, c => (
@@ -11,7 +42,7 @@ function esc(value) {
 // All API calls go through here: a failed request raises instead of silently
 // re-rendering the same stale queue.
 async function api(path, options = {}) {
-  const res = await fetch(`${API}${path}`, options);
+  const res = await apiFetch(path, options);
   const type = res.headers.get('content-type') || '';
   let payload = null;
   if (type.includes('application/json')) {
@@ -31,7 +62,7 @@ function reportError(prefix, err) {
 // PDFs are fetched first so a failure (401/502/404) shows up as a message instead of
 // a browser tab full of JSON.
 async function openPdf(path) {
-  const res = await fetch(`${API}${path}`);
+  const res = await apiFetch(path);
   if (!res.ok) {
     let detail = `${res.status} ${res.statusText}`;
     try {
@@ -55,7 +86,7 @@ let state = {
   packingQueue: [],      // orders currently in packing carousel
   packingIndex: 0,       // which card is shown
   packingDirection: null, // 'next' | 'prev' | null
-  settingsTab: 'config',
+  settingsTab: 'documents',
   customDocAvailable: false,
   shipmentSettings: null, // sender + package defaults for the packing view
 };
@@ -635,7 +666,6 @@ function renderSettings(el) {
   el.innerHTML = `
     <h2>Ustawienia</h2>
     <div class="settings-tabs">
-      <button class="settings-tab ${activeTab === 'config'    ? 'active' : ''}" data-tab="config">Konfiguracja</button>
       <button class="settings-tab ${activeTab === 'documents' ? 'active' : ''}" data-tab="documents">Dokumenty</button>
       <button class="settings-tab ${activeTab === 'shipping'  ? 'active' : ''}" data-tab="shipping">Wysyłka</button>
       <button class="settings-tab ${activeTab === 'archive'   ? 'active' : ''}" data-tab="archive">Archiwum</button>
@@ -651,7 +681,6 @@ function renderSettings(el) {
   });
 
   const panel = el.querySelector('#settings-panel');
-  if (activeTab === 'config')    renderSettingsConfig(panel);
   if (activeTab === 'documents') renderSettingsDocuments(panel);
   if (activeTab === 'shipping')  renderSettingsShipping(panel);
   if (activeTab === 'archive')   renderSettingsArchive(panel);
@@ -743,37 +772,6 @@ async function renderSettingsShipping(panel) {
   });
 }
 
-async function renderSettingsConfig(panel) {
-  const data = await api('/config/');
-
-  panel.innerHTML = `
-    <div class="settings-section">
-      <p class="settings-desc">Plik konfiguracyjny API (.env)</p>
-      <textarea id="config-content" spellcheck="false">${esc(data.content)}</textarea>
-      <p id="config-note" class="settings-note hidden"></p>
-      <div class="settings-actions">
-        <button class="btn btn-primary" id="config-save">Zapisz</button>
-      </div>
-    </div>
-  `;
-
-  panel.querySelector('#config-save').addEventListener('click', async () => {
-    const content = panel.querySelector('#config-content').value;
-    const note = panel.querySelector('#config-note');
-    try {
-      const result = await api('/config/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content }),
-      });
-      note.textContent = '✓ ' + result.note;
-    } catch (err) {
-      note.textContent = '✗ ' + err.message;
-    }
-    note.classList.remove('hidden');
-  });
-}
-
 async function renderSettingsDocuments(panel) {
   const [data, docInfo] = await Promise.all([
     api('/print/invoice-settings'),
@@ -858,8 +856,15 @@ async function renderSettingsDocuments(panel) {
     panel.querySelector('#custom-doc-filename').textContent = file.name;
     const form = new FormData();
     form.append('file', file);
-    const res = await fetch(`${API}/print/custom-doc`, { method: 'POST', body: form });
     const note = panel.querySelector('#custom-doc-note');
+    let res;
+    try {
+      res = await apiFetch('/print/custom-doc', { method: 'POST', body: form });
+    } catch (err) {
+      note.textContent = '✗ ' + err.message;
+      note.classList.remove('hidden');
+      return;
+    }
     if (res.ok) {
       state.customDocAvailable = true;
       note.textContent = '✓ Wgrano pomyślnie';
@@ -956,8 +961,7 @@ document.getElementById('btn-sync').addEventListener('click', async () => {
 
 document.getElementById('btn-auth').addEventListener('click', async () => {
   try {
-    const res = await fetch(`${API}/orders/auth/url`);
-    const data = await res.json();
+    const data = await api('/orders/auth/url');
     window.location.href = data.url;
   } catch (e) {
     alert('Błąd: ' + e.message);
@@ -974,8 +978,7 @@ setInterval(() => {
 
 async function checkAuthStatus() {
   try {
-    const res = await fetch(`${API}/orders/auth/status`);
-    const data = await res.json();
+    const data = await api('/orders/auth/status');
     document.getElementById('btn-auth').style.display = data.authorized ? 'none' : 'block';
   } catch {}
 }
@@ -984,8 +987,7 @@ async function checkAuthStatus() {
 
 async function checkCustomDoc() {
   try {
-    const res = await fetch(`${API}/print/custom-doc/info`);
-    const data = await res.json();
+    const data = await api('/print/custom-doc/info');
     state.customDocAvailable = data.available;
   } catch {}
 }
