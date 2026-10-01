@@ -2,11 +2,45 @@
 <html lang="pl">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Weles</title>
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-  <div id="app">
+  <section id="setup" class="setup-shell" aria-labelledby="setup-title">
+    <div class="setup-card">
+      <p class="setup-brand">Weles</p>
+      <h1 id="setup-title">Połącz swoje Allegro</h1>
+      <p class="setup-intro">Skonfiguruj dostęp do Allegro, aby pobierać zamówienia i przygotowywać przesyłki.</p>
+      <p id="setup-message" class="setup-message" role="status" aria-live="polite">Sprawdzanie konfiguracji…</p>
+
+      <form id="setup-form" class="hidden">
+        <p class="setup-help">Utwórz aplikację w <a href="https://developer.allegro.pl/" target="_blank" rel="noopener noreferrer">panelu deweloperskim Allegro</a> i skopiuj jej dane poniżej.</p>
+        <p id="setup-environment" class="setup-help"></p>
+        <p class="setup-help">Adres przekierowania aplikacji Allegro:</p>
+        <code id="setup-redirect-uri" class="setup-code"></code>
+        <label for="setup-client-id">Client ID</label>
+        <input id="setup-client-id" name="client_id" type="text" required maxlength="4096" autocomplete="off" spellcheck="false" autocapitalize="none" />
+        <label for="setup-client-secret">Client Secret</label>
+        <input id="setup-client-secret" name="client_secret" type="password" required maxlength="4096" autocomplete="off" spellcheck="false" autocapitalize="none" />
+        <p class="setup-help">Dane zostaną zapisane na serwerze. Client Secret nie będzie wyświetlany ponownie.</p>
+        <button id="setup-submit" class="btn btn-primary" type="submit">Zapisz i kontynuuj</button>
+      </form>
+
+      <div id="setup-success" class="hidden">
+        <h2>Dane Allegro zapisane</h2>
+        <p class="setup-help">Zachowaj poniższy token dostępu w bezpiecznym miejscu. Weles poprosi o niego przy kolejnym otwarciu aplikacji.</p>
+        <label for="setup-access-token">Token dostępu Weles</label>
+        <input id="setup-access-token" type="text" readonly autocomplete="off" spellcheck="false" />
+        <button id="setup-copy-token" class="btn btn-secondary" type="button">Kopiuj token</button>
+        <button id="setup-continue" class="btn btn-primary" type="button">Przejdź do aplikacji</button>
+      </div>
+
+      <button id="setup-retry" class="btn btn-secondary hidden" type="button">Sprawdź ponownie</button>
+    </div>
+  </section>
+
+  <div id="app" class="hidden">
     <aside id="sidebar">
       <h1 id="app-name">Weles</h1>
       <h2>Kolejki</h2>

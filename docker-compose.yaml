@@ -6,7 +6,14 @@ services:
     container_name: "packing"
     restart: "always"
     env_file: .env
+    environment:
+      PACKING_ENV_FILE: /app/.env
     ports:
       - "127.0.0.1:3001:3001"
     volumes:
       - "./data:/app/data"
+      - type: bind
+        source: ./.env
+        target: /app/.env
+        bind:
+          create_host_path: false

@@ -1,6 +1,7 @@
 const API = '/api';
 let accessToken = '';
 let accessTokenPrompt = null;
+let appReady = false;
 
 async function promptForAccessToken() {
   if (accessToken) return accessToken;
@@ -963,7 +964,7 @@ document.getElementById('btn-auth').addEventListener('click', async () => {
 
 // ---- Auto-refresh pending every 60s ----
 setInterval(() => {
-  if (state.currentQueue === 'pending') fetchAll();
+  if (appReady && state.currentQueue === 'pending') fetchAll();
 }, 60000);
 
 // ---- Auth status ----
@@ -985,9 +986,99 @@ async function checkCustomDoc() {
 }
 
 // ---- Boot ----
-fetchAll();
-checkAuthStatus();
-checkCustomDoc();
+
+async function startApp() {
+  document.getElementById('setup').classList.add('hidden');
+  document.getElementById('app').classList.remove('hidden');
+  appReady = true;
+  await Promise.all([fetchAll(), checkAuthStatus(), checkCustomDoc()]);
+}
+
+function setupMessage(message, isError = false) {
+  const el = document.getElementById('setup-message');
+  el.textContent = message;
+  el.classList.toggle('error', isError);
+}
+
+async function boot() {
+  const retry = document.getElementById('setup-retry');
+  retry.classList.add('hidden');
+  setupMessage('Sprawdzanie konfiguracji…');
+  try {
+    const status = await api('/setup/status');
+    if (status.configured) {
+      await startApp();
+      return;
+    }
+    const form = document.getElementById('setup-form');
+    document.getElementById('setup-environment').textContent = status.sandbox
+      ? 'Środowisko: Allegro Sandbox. Użyj danych aplikacji testowej.'
+      : 'Środowisko: Allegro. Użyj danych aplikacji produkcyjnej.';
+    document.getElementById('setup-redirect-uri').textContent = status.redirect_uri;
+    form.classList.remove('hidden');
+    setupMessage('');
+    form.onsubmit = async event => {
+      event.preventDefault();
+      const submit = document.getElementById('setup-submit');
+      const clientId = document.getElementById('setup-client-id');
+      const clientSecret = document.getElementById('setup-client-secret');
+      submit.disabled = true;
+      submit.textContent = 'Zapisywanie…';
+      setupMessage('');
+      try {
+        // Existing installations keep their current operator authentication.
+        if (status.requires_access_token) await promptForAccessToken();
+        const result = await api('/setup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Packing-Setup-Token': status.setup_token },
+          body: JSON.stringify({ client_id: clientId.value.trim(), client_secret: clientSecret.value.trim() }),
+        });
+        clientId.value = '';
+        clientSecret.value = '';
+        form.classList.add('hidden');
+        retry.classList.add('hidden');
+        if (result.access_token) {
+          accessToken = result.access_token;
+          document.getElementById('setup-access-token').value = result.access_token;
+          document.getElementById('setup-success').classList.remove('hidden');
+          setupMessage('Dane Allegro zapisane. Zachowaj token dostępu przed przejściem do aplikacji.');
+          document.getElementById('setup-access-token').focus();
+        } else {
+          await startApp();
+        }
+      } catch (err) {
+        setupMessage(err.message || 'Nie udało się zapisać konfiguracji.', true);
+        retry.classList.remove('hidden');
+      } finally {
+        submit.disabled = false;
+        submit.textContent = 'Zapisz i kontynuuj';
+      }
+    };
+    document.getElementById('setup-client-id').focus();
+  } catch (err) {
+    setupMessage(err.message || 'Nie udało się sprawdzić konfiguracji.', true);
+    retry.classList.remove('hidden');
+  }
+}
+
+document.getElementById('setup-retry').addEventListener('click', boot);
+document.getElementById('setup-continue').addEventListener('click', async () => {
+  document.getElementById('setup-access-token').value = '';
+  await startApp();
+});
+document.getElementById('setup-copy-token').addEventListener('click', async () => {
+  const field = document.getElementById('setup-access-token');
+  try {
+    await navigator.clipboard.writeText(field.value);
+    setupMessage('Token skopiowany. Zachowaj go w bezpiecznym miejscu.');
+  } catch {
+    field.focus();
+    field.select();
+    setupMessage('Skopiuj zaznaczony token i zachowaj go w bezpiecznym miejscu.');
+  }
+});
+
+boot();
 
 // Check every 30s in case user just came back from Allegro auth page
-setInterval(checkAuthStatus, 30000);
+setInterval(() => { if (appReady) checkAuthStatus(); }, 30000);

@@ -12,6 +12,13 @@ Docker-based order-packing application integrating Allegro order management and 
 
 ## Development and deployment
 
+For a new installation, create an empty configuration from the example first:
+
+```sh
+cp .env.example .env
+chmod 600 .env
+```
+
 Build and start the application with:
 
 ```sh
@@ -19,11 +26,24 @@ docker compose build packing
 docker compose up -d
 ```
 
-The Compose service mounts `./data` for persistent state, loads credentials from the host
-`.env` through `env_file`, and binds port 3001 to localhost. Keep `.env` mode 0600 and out
-of version control; `.dockerignore` keeps it and `data/` out of the build context.
-Set `PACKING_ACCESS_TOKEN` to a random value of at least 32 characters (see `.env.example`).
-The browser asks for that token when opening the app and holds it only for the page session.
+Open `http://localhost:3001`. If either Allegro credential is missing, first-run onboarding
+asks for Client ID and Client Secret. It shows the configured sandbox/production environment
+and the redirect URI to register in Allegro. Saving writes only those keys to the host `.env`,
+preserves the other settings, and applies the credentials immediately. Then use
+"Autoryzuj Allegro" to connect the seller account through OAuth.
+
+If no valid `PACKING_ACCESS_TOKEN` exists, setup generates one, saves it in `.env`, and
+shows it once. Save this token for future visits. If a token was already configured, setup
+requires it before saving. The browser holds the token only for the page session and asks
+for it on subsequent visits. Existing installations with both Allegro credentials skip onboarding.
+
+The Compose service mounts `./data` for persistent state and the host `.env` at `/app/.env`,
+loads initial settings through `env_file`, and binds port 3001 to localhost. The mounted file
+is authoritative for the three setup keys on startup, including after a container restart.
+Other settings retain Compose's resolved environment values. Keep `.env` mode 0600 and
+out of version control; `.dockerignore` keeps it and `data/` out of the build context.
+The file must exist and be writable by the container's uid 1000. Local development also
+loads the project `.env`; override its path with `PACKING_ENV_FILE`.
 
 The FastAPI application serves the frontend at `/`, static assets at `/static`, and API routes below `/api`.
 
@@ -35,7 +55,9 @@ python -m pytest backend/tests -q
 
 Needs `backend/requirements-dev.txt` (pytest). The suite covers the queue workflow, the
 state-file durability rules below, the request contracts, and the shipment-label edge cases.
-It runs against a temporary data directory and never calls Allegro.
+It runs against a temporary data directory and never calls Allegro. First-run tests additionally
+cover secret-safe validation, access control, preserving a Docker bind mount's inode,
+unrelated settings, and loading saved credentials after restart.
 
 ## Persistence rules
 
@@ -48,9 +70,13 @@ It runs against a temporary data directory and never calls Allegro.
   `degraded`) instead of a bare 500 per request; the UI shows it as a banner.
 - Records that fail validation are quarantined (kept in the file, reported by
   `/api/orders/status`) so one bad record cannot take the whole queue down.
-- Keep `.env` on the host and pass it to the container with Compose `env_file`; do not expose
-  it through an application endpoint. The API requires `PACKING_ACCESS_TOKEN` for all routes
-  under `/api/`, and Compose binds the web port to localhost.
+- Keep `.env` on the host; the application never returns its contents or Allegro credentials.
+  Setup updates the mounted file in place under a file lock with fsync (renaming a bind-mounted
+  file would fail). This is separate from the atomic state-file persistence described above.
+  The API requires `PACKING_ACCESS_TOKEN` for routes under `/api/`, except the OAuth callback,
+  credential-free setup status, and first-run setup when no valid token exists. Setup requires
+  the exact browser origin and a setup nonce, bootstrap is limited to localhost, and existing
+  Allegro credentials cannot be overwritten. Compose binds the web port to localhost.
 
 ## Application workflow
 

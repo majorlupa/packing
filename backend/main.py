@@ -5,14 +5,21 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import APIRouter, FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+
+import configuration
+
+configuration.load_environment()
 
 import store
 from routes.orders import router as orders_router
 from routes.queue import router as queue_router
 from routes.print_routes import router as print_router
+from routes.setup import router as setup_router, is_configured, requires_access_token
 
 logger = logging.getLogger("packing")
 
@@ -38,6 +45,19 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="Packing App", lifespan=lifespan)
 
 
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    if request.url.path == "/api/setup":
+        # Pydantic's normal error payload includes the submitted input. Do not
+        # echo a client secret, even when that input fails validation.
+        return JSONResponse(
+            status_code=422,
+            content={"detail": "Podaj poprawny Client ID i Client Secret (bez spacji i nowych linii, maksymalnie 4096 znaków)."},
+            headers={"Cache-Control": "no-store"},
+        )
+    return await request_validation_exception_handler(request, exc)
+
+
 @app.exception_handler(store.StateError)
 async def state_error_handler(request: Request, exc: store.StateError):
     """A broken state file is an operator problem, not a crash: say so plainly."""
@@ -52,16 +72,24 @@ api = APIRouter(prefix="/api")
 api.include_router(orders_router)
 api.include_router(queue_router)
 api.include_router(print_router)
+api.include_router(setup_router)
 app.include_router(api)
 
 
 @app.middleware("http")
 async def require_api_token(request: Request, call_next):
-    """Require the operator's bearer token for every API route except OAuth callback."""
+    """Protect the API; allow public status and a limited first-run bootstrap."""
     if (
         request.method == "OPTIONS"
         or not request.url.path.startswith("/api/")
         or request.url.path == "/api/orders/auth/callback"
+        or (request.method == "GET" and request.url.path == "/api/setup/status")
+        or (
+            request.method == "POST"
+            and request.url.path == "/api/setup"
+            and not is_configured()
+            and not requires_access_token()
+        )
     ):
         return await call_next(request)
 

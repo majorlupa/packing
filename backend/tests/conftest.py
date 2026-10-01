@@ -9,7 +9,7 @@ import pytest
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_DIR))
 
-PACKAGE_MODULES = ("store", "main", "api", "api.allegro", "routes")
+PACKAGE_MODULES = ("store", "main", "configuration", "api", "api.allegro", "routes")
 
 
 def sample_order(order_id="o-1", allegro_id="a-1", **overrides):
@@ -48,6 +48,8 @@ def app_env(tmp_path, monkeypatch):
     monkeypatch.setenv("PACKING_DATA_DIR", str(data_dir))
     monkeypatch.setenv("PACKING_ENV_FILE", str(env_file))
     monkeypatch.setenv("PACKING_ACCESS_TOKEN", "test-access-token-for-packing-api-2026")
+    monkeypatch.setenv("ALLEGRO_CLIENT_ID", "test")
+    monkeypatch.setenv("ALLEGRO_CLIENT_SECRET", "test")
 
     for name in list(sys.modules):
         if name in PACKAGE_MODULES or name.startswith(("api.", "routes.")):
