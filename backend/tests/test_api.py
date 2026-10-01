@@ -459,6 +459,19 @@ def test_missing_order_invoice_is_404(client):
     assert client.get("/api/print/orders/ghost/invoice").status_code == 404
 
 
+# ---------------------------------------------------------------- auth surface
+
+
+def test_token_and_raw_order_dumps_are_not_exposed(client):
+    """The bearer token and raw Allegro checkout forms (buyer PII) must not be reachable."""
+    assert client.get("/api/orders/auth/token").status_code == 404
+    assert client.get("/api/orders/debug/allegro-orders").status_code == 404
+
+
+def test_auth_status_never_leaks_the_token(client):
+    assert client.get("/api/orders/auth/status").json() == {"authorized": False}
+
+
 # ---------------------------------------------------------------- config (.env)
 
 

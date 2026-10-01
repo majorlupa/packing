@@ -37,23 +37,6 @@ async def state_status():
     return store.state_status()
 
 
-@router.get("/debug/allegro-orders")
-async def debug_allegro_orders():
-    """Dump raw order statuses from Allegro for debugging. Contains buyer PII — local use only."""
-    token = allegro._token
-    if not token:
-        raise HTTPException(status_code=401, detail="Not authorized")
-    async with httpx.AsyncClient(timeout=allegro.REQUEST_TIMEOUT) as client:
-        r = await client.get(
-            f"{allegro.API_URL}/order/checkout-forms",
-            headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.allegro.public.v1+json"},
-            params={"limit": 20},
-        )
-        if not r.is_success:
-            raise HTTPException(status_code=502, detail=f"Allegro {r.status_code}: {r.text[:300]}")
-        return r.json()
-
-
 @router.post("/sync")
 async def sync_from_allegro():
     """Pull new READY_FOR_PROCESSING orders from Allegro and add any not already stored."""
@@ -113,11 +96,6 @@ async def get_archive():
 @router.get("/auth/status")
 async def auth_status():
     return {"authorized": allegro._token is not None}
-
-
-@router.get("/auth/token")
-async def auth_token():
-    return {"token": allegro._token}
 
 
 @router.get("/auth/url")
