@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const test = require('node:test');
 function demo() {
-  const context = vm.createContext({ Response });
+  const context = vm.createContext({ Response, URLSearchParams });
   vm.runInContext(fs.readFileSync('frontend/demo/demo.js', 'utf8'), context);
   const api = context.WelesDemo;
   const read = async path => (await api.request(path)).json();
@@ -65,4 +65,29 @@ test('browser data is isolated between visitors', async () => {
   await first.send('/orders/sync');
   assert.equal((await first.read('/orders/')).length, 6);
   assert.equal((await second.read('/orders/')).length, 5);
+});
+
+test('locker sizes are stored per order, validated, printed and reset', async () => {
+  const { api, read } = demo();
+  const orders = await read('/orders/');
+  const lockers = orders.filter(order => order.courier === 'Paczkomat InPost');
+  assert.equal(lockers.length, 2);
+  const id = lockers[0].id;
+  assert.equal(lockers[0].parcel_size, 'A');
+  api.setParcelSize(id, 'B');
+  assert.equal((await read('/orders/')).find(order => order.id === id).parcel_size, 'B');
+  assert.equal((await read('/orders/')).find(order => order.id === lockers[1].id).parcel_size, 'A');
+  assert.throws(() => api.setParcelSize(id, 'D'), /gabaryt/);
+  assert.throws(() => api.setParcelSize(orders[0].id, 'B'), /gabaryt/);
+  for (const size of ['A', 'B', 'C']) {
+    const response = await api.request(`/print/orders/${id}/label?parcel_size=${size}`);
+    assert.equal(response.ok, true);
+    assert.match(await response.text(), new RegExp(`PACZKOMAT INPOST - SIZE ${size}`));
+  }
+  api.setParcelSize(id, 'A');
+  assert.equal((await read('/orders/')).find(order => order.id === id).shipment_id, null);
+  assert.equal((await api.request(`/print/orders/${id}/label?parcel_size=D`)).status, 400);
+  assert.equal((await api.request(`/print/orders/${id}/label?weight=1`)).status, 400);
+  api.reset();
+  assert.equal((await read('/orders/')).find(order => order.id === id).parcel_size, 'A');
 });

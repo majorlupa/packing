@@ -3,14 +3,16 @@
   'use strict';
   const initialOrders = () => [
     ['101', 'Anna Demo', 'Warszawa', 'InPost', [['Kubek ceramiczny — szałwia', 2, 39], ['Notes w kropki A5', 1, 24]]],
-    ['102', 'Marek Demo', 'Kraków', 'InPost', [['Kubek ceramiczny — szałwia', 1, 39]]],
+    ['102', 'Marek Demo', 'Kraków', 'Paczkomat InPost', [['Kubek ceramiczny — szałwia', 1, 39]]],
     ['103', 'Julia Demo', 'Gdańsk', 'DPD', [['Torba bawełniana', 2, 29], ['Notes w kropki A5', 1, 24]]],
     ['104', 'Piotr Demo', 'Poznań', 'DPD', [['Świeca sojowa — las', 1, 49]]],
-    ['105', 'Ewa Demo', 'Wrocław', 'InPost', [['Notes w kropki A5', 3, 24]]],
+    ['105', 'Ewa Demo', 'Wrocław', 'Paczkomat InPost', [['Notes w kropki A5', 3, 24]]],
   ].map(([id, buyer, city, courier, items]) => ({
     id: `demo-${id}`, allegro_id: `DEMO-${id}`, buyer_name: buyer,
     buyer_address: `ul. Przykładowa 1, ${city} (dane fikcyjne)`,
-    courier, pickup_point: courier === 'InPost' ? 'DEMO01M' : null,
+    courier, pickup_point: courier === 'Paczkomat InPost' ? 'DEMO01M' : null,
+    delivery_type: courier === 'Paczkomat InPost' ? 'inpost_locker' : 'courier',
+    parcel_size: courier === 'Paczkomat InPost' ? 'A' : null,
     status: 'pending', picking_list_id: null, shipment_id: null,
     items: items.map(([name, quantity, unit_price]) => ({ name, quantity, unit_price })),
   }));
@@ -29,10 +31,22 @@
     lists.forEach(list => { list.order_ids = list.order_ids.filter(oid => oid !== id); });
     lists = lists.filter(list => list.order_ids.length);
   }
+  function setParcelSize(id, size) {
+    const order = orders.find(entry => entry.id === id);
+    if (!order || order.delivery_type !== 'inpost_locker' || !['A', 'B', 'C'].includes(size)) {
+      throw new Error('Wybierz gabaryt A, B lub C dla przesyłki Paczkomat InPost.');
+    }
+    if (order.parcel_size !== size) {
+      order.parcel_size = size;
+      order.shipment_id = null;
+    }
+    return size;
+  }
   // A real, minimal PDF with an unmistakable sample watermark; no usable shipping barcode.
   function samplePdf(order, label) {
     const lines = ['WELES / DEMO', label ? 'SAMPLE SHIPPING LABEL' : 'SAMPLE ORDER DOCUMENT',
       'NOT VALID FOR SHIPPING OR ACCOUNTING', order.allegro_id,
+      ...(order.delivery_type === 'inpost_locker' ? [`PACZKOMAT INPOST - SIZE ${order.parcel_size}`] : []),
       ...order.items.map(item => `${item.quantity} x ${item.name}`)];
     const safe = value => value.normalize('NFKD').replace(/[^\x20-\x7E]/g, '?').replace(/[\\()]/g, '\\$&');
     const stream = `BT /F1 15 Tf 40 780 Td ${lines.map((line, i) => `${i ? '0 -30 Td ' : ''}(${safe(line)}) Tj`).join('\n')} ET`;
@@ -112,7 +126,14 @@
       const [, , , id, type] = route.split('/');
       const order = orders.find(entry => entry.id === id);
       if (!order) return json({ detail: 'Nie znaleziono zamówienia.' }, 404);
-      if (type === 'label') order.shipment_id = `sample-${id}`;
+      if (type === 'label') {
+        if (order.delivery_type === 'inpost_locker') {
+          const size = new URLSearchParams(path.split('?')[1] || '').get('parcel_size');
+          if (!['A', 'B', 'C'].includes(size)) return json({ detail: 'Wybierz gabaryt A, B lub C.' }, 400);
+          setParcelSize(id, size);
+        }
+        order.shipment_id = `sample-${id}`;
+      }
       response = samplePdf(order, type === 'label');
     } else return json({ detail: 'Ta funkcja wymaga pełnej wersji Weles. Demo działa wyłącznie na przykładowych danych.' }, 400);
     updateGuide();
@@ -121,7 +142,7 @@
   const steps = [
     ['Wybierz produkty do zebrania', 'W kolejce Oczekujące zaznacz produkt, a następnie kliknij „Utwórz listę kompletowania”. Powiązane zamówienia trafią na jedną listę.', 'pending'],
     ['Przygotuj zamówienia razem', 'Lista zbiera produkty z wybranych zamówień. Możesz zmienić jej nazwę lub ją wydrukować. Kliknij „Pakuj →”, aby przejść dalej.', 'picking'],
-    ['Spakuj pierwsze zamówienie', 'Sprawdź produkty i wymiary paczki. Otwórz przykładową etykietę lub dokument, a następnie kliknij „GOTOWE”. Wszystkie wydruki są oznaczone jako demo.', 'packing'],
+    ['Spakuj pierwsze zamówienie', 'Sprawdź produkty. Dla Paczkomat InPost wybierz gabaryt A, B lub C; dla kuriera podaj wymiary i wagę. Otwórz przykładową etykietę lub dokument, a następnie kliknij „GOTOWE”. Wszystkie wydruki są oznaczone jako demo.', 'packing'],
     ['Zamknij dzień pracy', 'Zamówienie jest w kolejce Gotowe. Kliknij „Zakończ dzień”, aby przenieść gotowe zamówienia do archiwum.', 'done'],
     ['Gotowe — znasz cały proces', 'Od zamówienia do archiwum. Eksperymentuj dalej, pobierz kolejne przykładowe zamówienie lub uruchom demo od początku.', 'settings'],
   ];
@@ -196,5 +217,5 @@
     try { seen = global.sessionStorage.getItem('weles-demo-welcome') === 'seen'; } catch { /* Optional storage. */ }
     if (!seen) dialog.showModal();
   }
-  global.WelesDemo = { request, reset, mount };
+  global.WelesDemo = { request, reset, mount, setParcelSize };
 })(globalThis);

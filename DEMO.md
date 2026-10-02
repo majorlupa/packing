@@ -8,6 +8,12 @@ No credentials, customer data, backend, or Allegro connection are used. Reloadin
 resets all orders; dismissing the welcome screen is remembered for the current tab.
 The guide can be skipped, reopened, or restarted from the header. Sample PDFs are
 watermarked and are not valid shipping labels or accounting documents.
+The Paczkomat InPost category uses per-order A/B/C parcel choices instead of
+dimensions and weight. Choices survive queue navigation within the demo session
+and appear on sample PDFs; changing the size invalidates the previous sample
+label. The demo stores `delivery_type: inpost_locker` and `parcel_size` for a future
+API integration. Live carrier integration is not implemented.
+
 Custom PDF uploads are unavailable in the demo and show an explanatory message.
 
 ## Preview

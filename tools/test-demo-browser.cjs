@@ -40,6 +40,7 @@ const server = http.createServer((req, res) => {
     await page.locator('#btn-create-pl').click();
     await page.locator('.btn-start-pack').first().waitFor();
     assert.match(await page.locator('#demo-step').innerText(), /2 \/ 5/);
+    assert.equal(await page.locator('#count-picking').innerText(), '1', 'same product in another delivery category stays pending');
     await page.locator('.btn-start-pack').first().click();
     await page.locator('#btn-label').waitFor();
     assert.match(await page.locator('#demo-step').innerText(), /3 \/ 5/);
@@ -70,6 +71,29 @@ const server = http.createServer((req, res) => {
     await page.locator('.btn-start-pack').first().click();
     await page.locator('#btn-label').waitFor();
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile packing must not overflow');
+    // Exercise the separate locker category on mobile, then retain the choice across navigation.
+    await page.locator('#demo-reset').click();
+    await page.waitForFunction(() => document.getElementById('count-pending').textContent === '5');
+    await page.locator('#courier-subnav .courier-nav-item').filter({ hasText: 'Paczkomat InPost' }).click();
+    await page.locator('#order-list input').first().check();
+    await page.locator('#btn-create-pl').click();
+    await page.locator('.btn-start-pack').first().click();
+    await page.locator('.parcel-sizes').waitFor();
+    assert.equal(await page.locator('#dim-l, #dim-wt').count(), 0);
+    await page.locator('input[name="parcel-size"][value="B"]').check();
+    await page.locator('[data-queue="pending"]').click();
+    await page.locator('[data-queue="packing"]').click();
+    assert.equal(await page.locator('input[name="parcel-size"][value="B"]').isChecked(), true);
+    assert.equal(await page.locator('#count-packing').innerText(), '1');
+    const lockerPopupReady = page.waitForEvent('popup');
+    await page.locator('#btn-label').click();
+    const lockerPopup = await lockerPopupReady;
+    await page.waitForFunction(() => document.getElementById('btn-label').textContent.includes('✓'));
+    await lockerPopup.close();
+    await page.locator('input[name="parcel-size"][value="C"]').check();
+    assert.equal(await page.locator('#btn-label').evaluate(el => el.classList.contains('printed')), false);
+    await page.screenshot({ path: '/tmp/weles-demo-locker-mobile.png' });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     const fresh = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await fresh.goto(url);
     await fresh.locator('.demo-welcome[open]').waitFor();
