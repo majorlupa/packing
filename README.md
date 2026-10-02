@@ -1,11 +1,18 @@
 # Weles
 
-Self-hosted order packing desk for [Allegro](https://allegro.pl) sellers. One Docker
-service replaces the spreadsheet-and-printer routine: orders are synced from Allegro,
-batched into picking lists, packed, and finished with a real shipment label and a
-combined sales/custom document PDF.
+Self-hosted order packing desk for Allegro sellers. One Docker service replaces
+the spreadsheet-and-printer routine: orders are synced from Allegro, batched into
+picking lists, packed, and finished with a real shipment label and a combined
+sales/custom document PDF.
 
 No SaaS, no per-seat fees — your orders stay on your machine and only talk to Allegro's API.
+
+> **Status: work in progress.** The code runs, but it is **not finished**. Label
+> creation, order sync and document generation are still being verified against the
+> Allegro **sandbox**, which the author does not have working yet — so treat every
+> part of the queue workflow as unproven until that lands. Shipping labels cost real
+> money, and there is no production-readiness guarantee. Use it to look around, not to
+> run your shop. Issues and pull requests welcome.
 
 ## What it does
 
@@ -74,7 +81,6 @@ detail.
 
 ## Disclaimer
 
-This is an independent tool, not affiliated with or endorsed by Allegro. It uses
-unpublished-in-spirit parts of your own seller account's APIs, so treat it as beta
-software: back up `data/`, keep `PACKING_SHIPMENT_DRY_RUN` on while testing, and
-verify a label before handing a parcel to the courier.
+This is an independent, unfinished tool, not affiliated with or endorsed by Allegro.
+Back up `data/`, keep `PACKING_SHIPMENT_DRY_RUN=true` while testing, and verify a
+label before handing a parcel to the courier.
