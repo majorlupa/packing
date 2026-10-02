@@ -168,10 +168,21 @@ def _normalise(raw: object) -> dict:
     return state
 
 
+def _read_backup(problem: str) -> dict:
+    """Load the previous generation, or explain that neither file can be used."""
+    try:
+        return _normalise(json.loads(BACKUP_FILE.read_text(encoding="utf-8")))
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError, StateError) as exc:
+        raise StateError(
+            f"Nie można odczytać {DATA_FILE} ({problem}) ani kopii zapasowej {BACKUP_FILE} ({exc}). "
+            "Pliki nie zostały nadpisane — przywróć stan ręcznie lub popraw pliki i zrestartuj kontener."
+        ) from exc
+
+
 def _load() -> dict:
     if not DATA_FILE.exists():
         if BACKUP_FILE.exists():
-            state = _normalise(json.loads(BACKUP_FILE.read_text(encoding="utf-8")))
+            state = _read_backup("brak pliku")
             state["_status"].update(ok=False, message="Brak/czytelnego state.json nie było — odtworzono z kopii zapasowej.")
             return state
         state = _default_state()
@@ -191,7 +202,7 @@ def _load() -> dict:
             os.replace(DATA_FILE, broken)
         except OSError:
             pass
-        state = _normalise(json.loads(BACKUP_FILE.read_text(encoding="utf-8")))
+        state = _read_backup(str(exc))
         state["_status"].update(
             ok=False,
             message=f"state.json był uszkodzony — odtworzono z kopii zapasowej ({broken.name}).",

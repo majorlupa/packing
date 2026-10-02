@@ -173,11 +173,21 @@ async def print_label(
                 package[key] = value
 
         try:
-            if not order.shipment_id:
+            shipment_id = order.shipment_id
+            if not shipment_id:
                 shipment_id = await allegro.create_shipment(order, settings["sender"], package)
-                order.shipment_id = shipment_id
-                store.save_order(order)
-            label_bytes = await allegro.download_label(order.shipment_id, package.get("page_size", "A6"))
+
+                # Persist only the new id: while Allegro was creating the shipment the
+                # order may have moved on (marked done, reverted, archived), and saving
+                # the whole stale record back would undo that change.
+                def remember_shipment(state):
+                    stored = state["orders"].get(order_id)
+                    if stored is not None:
+                        stored["shipment_id"] = shipment_id
+
+                store.transact(remember_shipment)
+
+            label_bytes = await allegro.download_label(shipment_id, package.get("page_size", "A6"))
         except allegro.AllegroError as exc:
             raise to_http_exception(exc)
         except httpx.HTTPError as exc:

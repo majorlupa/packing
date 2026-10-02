@@ -107,6 +107,39 @@ def test_sync_without_authorization_is_401(app_env, client):
     assert "Autoryzuj" in response.json()["detail"]
 
 
+def test_sync_with_a_non_json_success_page_is_502(app_env, client, monkeypatch):
+    """A CDN/gateway HTML page with status 200 must be a 502, never a 500."""
+    import api.allegro as allegro
+
+    class FakeResponse:
+        is_success = True
+        text = "<html>gateway</html>"
+
+        def json(self):
+            raise ValueError("Expecting value")
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, headers=None, params=None):
+            return FakeResponse()
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        allegro.httpx, "AsyncClient",
+        lambda **kwargs: real_client(**kwargs) if "transport" in kwargs else FakeClient(),
+    )
+    allegro._token = "test-token"
+
+    response = client.post("/api/orders/sync")
+    assert response.status_code == 502
+    assert "nieprawidłowe dane" in response.json()["detail"]
+
+
 def _checkout_form(allegro_id):
     return {
         "id": allegro_id,
@@ -272,6 +305,23 @@ def test_order_moved_to_a_new_picking_list_leaves_the_old_one(app_env, client):
     assert client.get("/api/orders/").json()[0]["status"] == "pending"
 
 
+def test_stale_picking_list_cannot_resurrect_a_done_order(app_env, client):
+    """The packing view keeps the list for reprinting; its buttons must not move
+    an order that is already packed and done back into the queue."""
+    app_env.write_state(app_env.default_state({"o-1": sample_order("o-1", "a-1")}))
+    pl = client.post("/api/picking-lists", json={"name": "", "order_ids": ["o-1"]}).json()
+    client.post(f"/api/picking-lists/{pl['id']}/start-packing")
+    client.post("/api/orders/o-1/done")
+
+    again = client.post(f"/api/picking-lists/{pl['id']}/start-packing")
+    assert again.json() == {"status": "ok", "order_ids": []}
+    assert client.post(f"/api/picking-lists/{pl['id']}/revert").status_code == 200
+
+    order = client.get("/api/orders/").json()[0]
+    assert order["status"] == "done"
+    assert order["picking_list_id"] is None
+
+
 # ---------------------------------------------------------------- settings
 
 
@@ -379,6 +429,26 @@ def test_corrupt_state_recovers_from_backup(app_env, client):
     assert "kopii zapasowej" in status["message"]
     # the unreadable file is kept aside, not deleted
     assert list(app_env.data_dir.glob("state.json.corrupt-*"))
+
+
+def test_unreadable_backup_is_503_not_500(app_env, client):
+    """A gateway crash that damages both generations must be an operator problem."""
+    app_env.state_file.write_text("{not json", encoding="utf-8")
+    app_env.backup_file.write_text("{also not json", encoding="utf-8")
+
+    response = client.get("/api/orders/")
+    assert response.status_code == 503
+    assert response.json()["state_ok"] is False
+    assert "kopii zapasowej" in response.json()["detail"]
+    assert client.get("/health").json()["status"] == "degraded"
+
+
+def test_missing_state_with_unreadable_backup_is_503(app_env, client):
+    app_env.backup_file.write_text("[not an object]", encoding="utf-8")
+
+    response = client.get("/api/orders/")
+    assert response.status_code == 503
+    assert "kopii zapasowej" in response.json()["detail"]
 
 
 def test_missing_state_file_starts_empty(client):
@@ -594,6 +664,33 @@ def test_repeated_label_request_reuses_the_shipment(app_env, client, monkeypatch
     assert calls["download"] == 1
 
 
+def test_label_keeps_a_concurrent_status_change(app_env, client, monkeypatch):
+    """Buying a label must not write the whole stale order back over the queue."""
+    import api.allegro as allegro
+
+    app_env.write_state(app_env.default_state({"o-1": sample_order()}))
+    allegro._token = "test-token"
+
+    async def fake_create(order, sender, package):
+        # The operator finishes the order while Allegro is creating the shipment.
+        def mark_done(state):
+            state["orders"]["o-1"]["status"] = "done"
+
+        app_env.store.transact(mark_done)
+        return "shipment-uuid"
+
+    async def fake_download(shipment_id, page_size="A6"):
+        return b"%PDF-1.4 fake"
+
+    monkeypatch.setattr(allegro, "create_shipment", fake_create)
+    monkeypatch.setattr(allegro, "download_label", fake_download)
+
+    assert client.get("/api/print/orders/o-1/label").status_code == 200
+    order = json.loads(app_env.state_file.read_text(encoding="utf-8"))["orders"]["o-1"]
+    assert order["status"] == "done"
+    assert order["shipment_id"] == "shipment-uuid"
+
+
 # ---------------------------------------------------------------- documents
 
 
@@ -643,6 +740,7 @@ def _fake_token_client(monkeypatch, responses):
     import api.allegro as allegro
 
     calls = []
+    real_client = httpx.AsyncClient
 
     class FakeClient:
         async def __aenter__(self):
@@ -655,7 +753,11 @@ def _fake_token_client(monkeypatch, responses):
             calls.append(data)
             return responses[data["grant_type"]]
 
-    monkeypatch.setattr(allegro.httpx, "AsyncClient", lambda **kwargs: FakeClient())
+    # Keep the ASGI test transport working while the fake handles API calls.
+    monkeypatch.setattr(
+        allegro.httpx, "AsyncClient",
+        lambda **kwargs: real_client(**kwargs) if "transport" in kwargs else FakeClient(),
+    )
     return calls
 
 
@@ -728,3 +830,25 @@ def test_invalid_persisted_session_requires_reauthorization(app_env, client, pay
     assert client.get("/api/orders/auth/status").json() == {"authorized": False}
     with pytest.raises(allegro.AllegroNotAuthorized):
         asyncio.run(allegro._access_token())
+
+
+def test_non_json_token_responses_are_allegro_errors(app_env, client, monkeypatch):
+    """A malformed token body must be a 502 on the next API call, not a 500."""
+    import api.allegro as allegro
+
+    class HtmlResponse(_FakeTokenResponse):
+        def json(self):
+            raise ValueError("Expecting value")
+
+    _fake_token_client(monkeypatch, {"authorization_code": HtmlResponse({})})
+    with pytest.raises(allegro.AllegroError):
+        asyncio.run(allegro.exchange_code("code"))
+
+    _fake_token_client(monkeypatch, {"refresh_token": HtmlResponse({})})
+    (app_env.data_dir / "allegro_token.json").write_text(
+        json.dumps({"access_token": "old", "refresh_token": "r1", "expires_at": time.time() - 10}),
+        encoding="utf-8",
+    )
+    response = client.post("/api/orders/sync")
+    assert response.status_code == 502
+    assert "odświeżenie tokenu" in response.json()["detail"]
