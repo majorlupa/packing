@@ -381,6 +381,26 @@ def test_corrupt_state_recovers_from_backup(app_env, client):
     assert list(app_env.data_dir.glob("state.json.corrupt-*"))
 
 
+def test_unreadable_backup_is_503_not_500(app_env, client):
+    """A gateway crash that damages both generations must be an operator problem."""
+    app_env.state_file.write_text("{not json", encoding="utf-8")
+    app_env.backup_file.write_text("{also not json", encoding="utf-8")
+
+    response = client.get("/api/orders/")
+    assert response.status_code == 503
+    assert response.json()["state_ok"] is False
+    assert "kopii zapasowej" in response.json()["detail"]
+    assert client.get("/health").json()["status"] == "degraded"
+
+
+def test_missing_state_with_unreadable_backup_is_503(app_env, client):
+    app_env.backup_file.write_text("[not an object]", encoding="utf-8")
+
+    response = client.get("/api/orders/")
+    assert response.status_code == 503
+    assert "kopii zapasowej" in response.json()["detail"]
+
+
 def test_missing_state_file_starts_empty(client):
     assert client.get("/api/orders/").json() == []
 
