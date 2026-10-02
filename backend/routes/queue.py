@@ -1,9 +1,9 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Literal
 import uuid
 import store
-from models.order import OrderStatus, PickingList
+from models.order import Order, OrderStatus, PickingList
 
 router = APIRouter(tags=["queue"])
 
@@ -140,3 +140,25 @@ async def revert_to_pending_single(order_id: str):
 @router.post("/orders/{order_id}/undo-done")
 async def undo_done(order_id: str):
     return _set_status(order_id, OrderStatus.packing)
+
+
+class ParcelSizeRequest(BaseModel):
+    parcel_size: Literal["A", "B", "C"]
+
+
+@router.patch("/orders/{order_id}/parcel-size")
+async def set_parcel_size(order_id: str, req: ParcelSizeRequest) -> dict[str, str]:
+    """Persist a locker size locally; carrier integration is deferred."""
+    def mutate(state: dict) -> dict[str, str]:
+        data = state["orders"].get(order_id)
+        if data is None:
+            raise HTTPException(status_code=404, detail="Order not found.")
+        order = Order.model_validate(data)
+        if not order.is_inpost_locker:
+            raise HTTPException(status_code=400, detail="Gabaryt A/B/C dotyczy tylko Paczkomat InPost.")
+        if order.shipment_id or order.tracking_number:
+            raise HTTPException(status_code=409, detail="Przesyłka już istnieje — nie można zmienić gabarytu.")
+        data["parcel_size"] = req.parcel_size
+        return {"parcel_size": req.parcel_size}
+
+    return store.transact(mutate)

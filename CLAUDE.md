@@ -114,3 +114,19 @@ may only be created once, so a double click must not create two.
 - Allegro client failures map to 401 (not authorized) or 502 (upstream), never 404.
 
 See `FINDINGS.md` for the latest review, deployment notes, and API audit.
+
+## Beta: Paczkomat InPost parcel sizes
+
+Delivery method names containing both `InPost` and `Paczkomat` (including
+`Allegro Paczkomaty InPost`) appear under `Paczkomat InPost` in pending orders.
+Their packing cards offer A/B/C instead of dimensions and weight. The optional
+`parcel_size` order field is saved atomically through
+`PATCH /api/orders/{id}/parcel-size` and survives restarts and queue changes.
+New locker orders have no size selected; choosing A, B, or C explicitly saves it.
+Pending saves retain their selection and disable further changes across navigation.
+Courier deliveries retain dimension/weight inputs.
+
+Carrier integration for these size choices is deferred: new locker labels are
+disabled in the UI and return 501 from the label endpoint. Existing shipment
+labels can still be downloaded, and their parcel size cannot be changed.
+The GitHub Pages demo remains separate from beta.

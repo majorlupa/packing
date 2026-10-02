@@ -99,6 +99,8 @@ let state = {
   settingsTab: 'documents',
   customDocAvailable: false,
   shipmentSettings: null, // sender + package defaults for the packing view
+  parcelSizeSaves: new Map(),
+  parcelSizeErrors: new Map(),
 };
 
 // ---- Fetch ----
@@ -142,6 +144,10 @@ async function fetchAll() {
 }
 
 
+function deliveryCategory(order) {
+  return order.delivery_type === 'inpost_locker' ? 'Paczkomat InPost' : (order.courier || 'Inny');
+}
+
 // ---- Badges ----
 
 function updateBadges() {
@@ -155,7 +161,7 @@ function updateBadges() {
   const pendingOrders = state.orders.filter(o => o.status === 'pending');
   const courierCounts = {};
   pendingOrders.forEach(o => {
-    const c = o.courier || 'Inny';
+    const c = deliveryCategory(o);
     courierCounts[c] = (courierCounts[c] || 0) + 1;
   });
 
@@ -163,7 +169,7 @@ function updateBadges() {
   if (existing) existing.remove();
 
   const couriers = Object.keys(courierCounts);
-  if (couriers.length <= 1) return; // no point showing sub-nav for single courier
+  if (couriers.length <= 1 && !courierCounts['Paczkomat InPost']) return;
 
   const ul = document.createElement('ul');
   ul.id = 'courier-subnav';
@@ -208,7 +214,7 @@ function renderQueue(queue) {
 function renderPending(el) {
   const orders = state.orders.filter(o =>
     o.status === 'pending' &&
-    (!state.currentCourier || (o.courier || 'Inny') === state.currentCourier)
+    (!state.currentCourier || (deliveryCategory(o)) === state.currentCourier)
   );
   state.selectedOrderIds.clear();
 
@@ -233,7 +239,7 @@ function renderPending(el) {
   // Group orders by courier
   const byCourier = {};
   orders.forEach(order => {
-    const courier = order.courier || 'Inny';
+    const courier = deliveryCategory(order);
     if (!byCourier[courier]) byCourier[courier] = [];
     byCourier[courier].push(order);
   });
@@ -258,14 +264,16 @@ function renderPending(el) {
         if (!courierProductMap[item.name]) courierProductMap[item.name] = { qty: 0, orderIds: new Set() };
         courierProductMap[item.name].qty += item.quantity;
         courierProductMap[item.name].orderIds.add(order.id);
-        // Also track globally for order ID collection
-        if (!productMap[item.name]) productMap[item.name] = { qty: 0, orderIds: new Set() };
-        productMap[item.name].qty += item.quantity;
-        productMap[item.name].orderIds.add(order.id);
+        // Keep products from different delivery categories separate.
+        const key = JSON.stringify([courier, item.name]);
+        if (!productMap[key]) productMap[key] = { qty: 0, orderIds: new Set() };
+        productMap[key].qty += item.quantity;
+        productMap[key].orderIds.add(order.id);
       });
     });
 
     Object.entries(courierProductMap).forEach(([name, data]) => {
+      const productKey = JSON.stringify([courier, name]);
       const txCount = data.orderIds.size;
       const card = document.createElement('div');
       card.className = 'order-card';
@@ -279,10 +287,10 @@ function renderPending(el) {
       const cb = card.querySelector('input');
       cb.addEventListener('change', () => {
         if (cb.checked) {
-          selectedProducts.add(name);
+          selectedProducts.add(productKey);
           card.classList.add('selected');
         } else {
-          selectedProducts.delete(name);
+          selectedProducts.delete(productKey);
           card.classList.remove('selected');
         }
 
@@ -486,6 +494,10 @@ function renderPackingCard(el) {
   state.packingDirection = null;
 
   const pkg = (state.shipmentSettings && state.shipmentSettings.package) || {};
+  const isLocker = order.delivery_type === 'inpost_locker';
+  const lockerLabelUnavailable = isLocker && !order.shipment_id;
+  const pendingSize = state.parcelSizeSaves.get(order.id);
+  const selectedSize = pendingSize ? pendingSize.value : order.parcel_size;
 
   view.innerHTML = `
     <div class="pack-nav">
@@ -503,16 +515,28 @@ function renderPackingCard(el) {
         <button class="btn-copy" data-copy="${esc(order.allegro_id)}" title="Kopiuj ID">⧉</button>
       </div>
       <div class="items">${order.items.map(i => `${i.quantity}x ${esc(i.name)}`).join('<br/>')}</div>
-      <div class="pack-dims">
+      ${isLocker ? `
+      <fieldset class="parcel-sizes" ${pendingSize || order.shipment_id || order.tracking_number ? 'disabled' : ''}>
+        <legend>Paczkomat InPost — gabaryt paczki</legend>
+        <div class="parcel-size-options">
+          ${[['A', 'Mała'], ['B', 'Średnia'], ['C', 'Duża']].map(([size, title]) => `
+            <label class="parcel-size-option">
+              <input type="radio" name="parcel-size" value="${size}" ${selectedSize === size ? 'checked' : ''}>
+              <span><strong>${size}</strong>${title}</span>
+            </label>`).join('')}
+        </div>
+      </fieldset>` : `<div class="pack-dims">
         <label>Wymiary (cm)</label>
         <input type="number" class="dim-input" id="dim-l" value="${esc(pkg.length ?? 30)}" min="1"> ×
         <input type="number" class="dim-input" id="dim-w" value="${esc(pkg.width ?? 20)}" min="1"> ×
         <input type="number" class="dim-input" id="dim-h" value="${esc(pkg.height ?? 15)}" min="1">
         <label style="margin-left:12px">Waga (kg)</label>
         <input type="number" class="dim-input" id="dim-wt" value="${esc(pkg.weight ?? 1.0)}" min="0.1" step="0.1">
-      </div>
+      </div>`}
+      ${lockerLabelUnavailable ? '<p class="parcel-size-note">Wybierz gabaryt paczki. Tworzenie etykiet Paczkomat InPost będzie dostępne po podłączeniu API.</p>' : ''}
+      <p id="parcel-size-status" class="parcel-size-note" role="status" aria-live="polite">${pendingSize ? 'Zapisywanie gabarytu…' : esc(state.parcelSizeErrors.get(order.id) || '')}</p>
       <div class="pack-buttons">
-        <button class="btn btn-label" id="btn-label">🖨 Etykieta kurierska</button>
+        <button class="btn btn-label" id="btn-label" ${lockerLabelUnavailable ? 'disabled' : ''}>🖨 Etykieta kurierska</button>
         <button class="btn btn-invoice" id="btn-invoice">🖨 Dokument</button>
         <button class="btn btn-done" id="btn-done">✓ GOTOWE</button>
       </div>
@@ -547,6 +571,33 @@ function renderPackingCard(el) {
 
   // The label may already exist from an earlier session — do not warn in that case.
   let labelReady = Boolean(order.shipment_id);
+  view.querySelectorAll('input[name="parcel-size"]').forEach(input => {
+    input.addEventListener('change', async () => {
+      if (state.parcelSizeSaves.has(order.id)) return;
+      const fieldset = view.querySelector('.parcel-sizes');
+      const note = view.querySelector('#parcel-size-status');
+      state.parcelSizeSaves.set(order.id, { value: input.value });
+      state.parcelSizeErrors.delete(order.id);
+      fieldset.disabled = true;
+      note.textContent = 'Zapisywanie gabarytu…';
+      try {
+        const result = await api(`/orders/${order.id}/parcel-size`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ parcel_size: input.value }),
+        });
+        for (const saved of [order, ...state.orders, ...state.packingQueue]) {
+          if (saved.id === order.id) saved.parcel_size = result.parcel_size;
+        }
+      } catch (err) {
+        state.parcelSizeErrors.set(order.id, `Nie udało się zapisać gabarytu: ${err.message}`);
+      } finally {
+        state.parcelSizeSaves.delete(order.id);
+        if (state.currentQueue === 'packing' && state.packingQueue[state.packingIndex]?.id === order.id) {
+          renderPackingCard(document.getElementById('content'));
+        }
+      }
+    });
+  });
 
   view.querySelector('#btn-prev').addEventListener('click', () => {
     state.packingDirection = 'prev';
@@ -560,15 +611,17 @@ function renderPackingCard(el) {
   });
   view.querySelector('#btn-label').addEventListener('click', async () => {
     const btn = view.querySelector('#btn-label');
-    const l  = view.querySelector('#dim-l').value;
-    const w  = view.querySelector('#dim-w').value;
-    const h  = view.querySelector('#dim-h').value;
-    const wt = view.querySelector('#dim-wt').value;
+    const params = isLocker
+      ? new URLSearchParams()
+      : new URLSearchParams({
+        length: view.querySelector('#dim-l').value, width: view.querySelector('#dim-w').value,
+        height: view.querySelector('#dim-h').value, weight: view.querySelector('#dim-wt').value,
+      });
     btn.disabled = true;
     const previousLabel = btn.textContent;
     btn.textContent = 'Generowanie etykiety…';
     try {
-      await openPdf(`/print/orders/${order.id}/label?length=${l}&width=${w}&height=${h}&weight=${wt}`);
+      await openPdf(`/print/orders/${order.id}/label?${params}`);
       // Only claim the label is printed once the PDF actually came back.
       labelReady = true;
       btn.classList.add('printed');

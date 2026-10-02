@@ -1,6 +1,6 @@
 from enum import Enum
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Literal
 
 
 class OrderStatus(str, Enum):
@@ -38,6 +38,13 @@ class Order(BaseModel):
     delivery_method_id: Optional[str] = None
     # Shipment management UUID (set after creating shipment via API)
     shipment_id: Optional[str] = None
+    parcel_size: Optional[Literal["A", "B", "C"]] = None
+
+    @property
+    def is_inpost_locker(self) -> bool:
+        name = (self.courier or "").casefold()
+        return "inpost" in name and "paczkomat" in name
+
 
 
 class PickingList(BaseModel):

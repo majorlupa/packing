@@ -160,6 +160,12 @@ async def print_label(
         if order is None:
             raise HTTPException(status_code=404, detail="Order not found.")
 
+        if order.is_inpost_locker and not order.shipment_id:
+            raise HTTPException(
+                status_code=501,
+                detail="Tworzenie etykiet Paczkomat InPost będzie dostępne po podłączeniu API.",
+            )
+
         settings = store.get_shipment_settings()
         package = dict(settings["package"])
         for key, value in (("length", length), ("width", width), ("height", height), ("weight", weight)):

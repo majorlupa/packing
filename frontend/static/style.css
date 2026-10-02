@@ -491,3 +491,14 @@ body {
   transition: background 0.15s;
 }
 .btn-icon-red:hover { background: rgba(233,69,96,0.15); }
+.parcel-sizes { border: 0; margin: 24px 0; padding: 0; }
+.parcel-sizes legend { font-size: 14px; color: #c2cfe0; margin-bottom: 12px; }
+.parcel-size-options { display: flex; gap: 12px; }
+.parcel-size-option { flex: 1; max-width: 150px; cursor: pointer; }
+.parcel-size-option input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.parcel-size-option span { display: flex; flex-direction: column; align-items: center; gap: 5px; border: 2px solid #475772; background: #1d304b; border-radius: 10px; padding: 14px; font-size: 13px; }
+.parcel-size-option strong { font-size: 28px; }
+.parcel-size-option input:checked + span { border-color: #65dfb5; background: #14352f; color: #78e5bf; }
+.parcel-size-option input:focus-visible + span { outline: 3px solid #78e5bf; outline-offset: 3px; }
+.parcel-size-note { margin: 12px 0; color: var(--text-dim); font-size: 13px; line-height: 1.5; }
+.parcel-sizes:disabled { opacity: 0.7; }

@@ -33,7 +33,8 @@ _oauth_state_deadline = 0.0
 @router.get("/", response_model=List[dict])
 async def list_orders():
     orders = store.get_orders()
-    return [o.model_dump() for o in orders.values()]
+    return [{**o.model_dump(), "delivery_type": "inpost_locker" if o.is_inpost_locker else "courier"}
+            for o in orders.values()]
 
 
 @router.get("/status")
