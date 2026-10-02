@@ -272,6 +272,23 @@ def test_order_moved_to_a_new_picking_list_leaves_the_old_one(app_env, client):
     assert client.get("/api/orders/").json()[0]["status"] == "pending"
 
 
+def test_stale_picking_list_cannot_resurrect_a_done_order(app_env, client):
+    """The packing view keeps the list for reprinting; its buttons must not move
+    an order that is already packed and done back into the queue."""
+    app_env.write_state(app_env.default_state({"o-1": sample_order("o-1", "a-1")}))
+    pl = client.post("/api/picking-lists", json={"name": "", "order_ids": ["o-1"]}).json()
+    client.post(f"/api/picking-lists/{pl['id']}/start-packing")
+    client.post("/api/orders/o-1/done")
+
+    again = client.post(f"/api/picking-lists/{pl['id']}/start-packing")
+    assert again.json() == {"status": "ok", "order_ids": []}
+    assert client.post(f"/api/picking-lists/{pl['id']}/revert").status_code == 200
+
+    order = client.get("/api/orders/").json()[0]
+    assert order["status"] == "done"
+    assert order["picking_list_id"] is None
+
+
 # ---------------------------------------------------------------- settings
 
 
