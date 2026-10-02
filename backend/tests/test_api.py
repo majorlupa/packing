@@ -594,6 +594,33 @@ def test_repeated_label_request_reuses_the_shipment(app_env, client, monkeypatch
     assert calls["download"] == 1
 
 
+def test_label_keeps_a_concurrent_status_change(app_env, client, monkeypatch):
+    """Buying a label must not write the whole stale order back over the queue."""
+    import api.allegro as allegro
+
+    app_env.write_state(app_env.default_state({"o-1": sample_order()}))
+    allegro._token = "test-token"
+
+    async def fake_create(order, sender, package):
+        # The operator finishes the order while Allegro is creating the shipment.
+        def mark_done(state):
+            state["orders"]["o-1"]["status"] = "done"
+
+        app_env.store.transact(mark_done)
+        return "shipment-uuid"
+
+    async def fake_download(shipment_id, page_size="A6"):
+        return b"%PDF-1.4 fake"
+
+    monkeypatch.setattr(allegro, "create_shipment", fake_create)
+    monkeypatch.setattr(allegro, "download_label", fake_download)
+
+    assert client.get("/api/print/orders/o-1/label").status_code == 200
+    order = json.loads(app_env.state_file.read_text(encoding="utf-8"))["orders"]["o-1"]
+    assert order["status"] == "done"
+    assert order["shipment_id"] == "shipment-uuid"
+
+
 # ---------------------------------------------------------------- documents
 
 
