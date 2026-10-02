@@ -1,0 +1,58 @@
+/* Demo chrome is only included in the Pages artifact. */
+:root { --demo-bar-height: 64px; }
+.demo-mode { height: 100dvh; }
+.demo-bar { min-height: var(--demo-bar-height); padding: 12px 24px; display: flex; align-items: center; gap: 24px; background: #111a2d; border-bottom: 1px solid #31415b; }
+.demo-brand { color: #fff; font-size: 22px; font-weight: 750; text-decoration: none; white-space: nowrap; }
+.demo-brand span { color: #65dfb5; font-size: 10px; letter-spacing: 2px; border: 1px solid #386152; border-radius: 5px; padding: 5px 7px; vertical-align: middle; margin-left: 6px; }
+.demo-bar p { color: #b5bfd0; font-size: 13px; flex: 1; }
+.demo-bar > div { display: flex; align-items: center; gap: 12px; }
+.demo-bar button, .demo-bar > div a, #demo-skip-guide { background: transparent; color: #d6e0f1; font: inherit; font-size: 12px; border: 1px solid #475772; border-radius: 6px; padding: 8px 10px; text-decoration: none; cursor: pointer; }
+.demo-mode #app { height: calc(100dvh - var(--demo-bar-height)); display: grid; grid-template-columns: 220px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+.demo-mode #sidebar { grid-column: 1; grid-row: 1 / -1; overflow-y: auto; }
+.demo-mode #content { grid-column: 2; min-width: 0; overflow-y: auto; }
+.demo-mode.demo-guided #app { grid-template-rows: auto minmax(0, 1fr); }
+.demo-guide { grid-column: 2; background: #14352f; border: 1px solid #3a7865; border-radius: 12px; margin: 20px 32px 0; padding: 16px 20px; }
+.demo-guide-top, .demo-guide-bottom { display: flex; gap: 16px; justify-content: space-between; align-items: center; }
+#demo-step, .demo-eyebrow { color: #78e5bf; font-size: 11px; letter-spacing: 2px; font-weight: 700; }
+#demo-skip-guide { border: 0; padding: 4px; }
+.demo-guide h2 { font-size: 19px; margin: 10px 0 6px; }
+.demo-guide p { font-size: 14px; line-height: 1.6; color: #cee1da; max-width: 850px; }
+.demo-guide-bottom { margin-top: 12px; }
+.demo-guide progress { width: 150px; height: 6px; accent-color: #65dfb5; }
+.demo-welcome { color: #edf2fa; background: #15223a; border: 1px solid #47627a; border-radius: 24px; padding: 42px; width: min(680px, calc(100% - 32px)); max-height: calc(100dvh - 32px); margin: auto; box-shadow: 0 30px 100px #0008; }
+.demo-welcome::backdrop { background: #060d20b8; backdrop-filter: blur(7px); }
+.demo-welcome h1 { font-size: clamp(30px, 6vw, 48px); line-height: 1.1; letter-spacing: -1.5px; margin: 20px 0; }
+.demo-lead { color: #c2cfe0; line-height: 1.7; font-size: 16px; }
+.demo-flow { list-style: none; display: flex; gap: 12px; margin: 28px 0; }
+.demo-flow li { flex: 1; background: #1d304b; padding: 16px; border-radius: 10px; font-size: 13px; line-height: 1.5; }
+.demo-flow span { display: block; color: #78e5bf; font-size: 12px; margin-bottom: 8px; }
+.demo-welcome-actions { display: flex; flex-direction: column; gap: 10px; }
+.demo-welcome-actions button { padding: 15px; font-size: 15px; }
+.demo-welcome-actions .btn-primary { background: #65dfb5; color: #10261e; font-weight: 700; }
+.demo-footnote { margin-top: 22px; color: #a6b7cc; line-height: 1.6; font-size: 12px; }
+.demo-mode button:focus-visible, .demo-mode a:focus-visible, .demo-mode input:focus-visible { outline: 3px solid #78e5bf; outline-offset: 3px; }
+@media (max-width: 900px) { .demo-bar p { display: none; } .demo-bar { justify-content: space-between; } }
+@media (max-width: 640px) {
+  :root { --demo-bar-height: 100px; }
+  .demo-bar { height: var(--demo-bar-height); padding: 10px 14px; flex-wrap: wrap; gap: 8px; }
+  .demo-bar > div { width: 100%; gap: 8px; }
+  .demo-mode #app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .demo-mode.demo-guided #app { grid-template-rows: auto auto minmax(0, 1fr); }
+  .demo-mode #sidebar { grid-column: 1; grid-row: 1; width: 100%; padding: 10px 12px; display: block; max-height: 145px; }
+  .demo-mode #sidebar h1, .demo-mode #sidebar h2, .demo-mode #sidebar hr, .demo-mode #courier-subnav { display: none; }
+  .demo-mode #sidebar > ul { display: flex; gap: 4px; margin-bottom: 8px; }
+  .demo-mode #sidebar .queue-item { flex: 1; padding: 8px 4px; font-size: 11px; }
+  .demo-mode #sidebar > button { display: inline-block; width: auto; margin: 2px; font-size: 11px; padding: 7px; }
+  .demo-mode #content { grid-column: 1; padding: 18px 12px; }
+  .demo-guide { grid-column: 1; margin: 10px 12px 0; padding: 12px; }
+  .demo-guide h2 { font-size: 16px; }
+  .demo-guide p { font-size: 12px; }
+  .demo-welcome { padding: 26px 22px; }
+  .demo-flow { gap: 6px; margin: 20px 0; }
+  .demo-flow li { padding: 10px; font-size: 12px; }
+  .demo-mode .pack-card { padding: 20px 14px; }
+  .demo-mode .pack-dims, .demo-mode .pack-buttons, .demo-mode .settings-tabs { flex-wrap: wrap; }
+  .demo-mode .picking-card { flex-wrap: wrap; gap: 12px; }
+  .demo-mode #pending-toolbar { flex-wrap: wrap; }
+}
+@media (prefers-reduced-motion: reduce) { .demo-mode *, .demo-mode *::before, .demo-mode *::after { animation: none !important; transition: none !important; } }

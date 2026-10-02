@@ -17,6 +17,7 @@ async function promptForAccessToken() {
 }
 
 async function apiFetch(path, options = {}) {
+  if (window.WelesDemo) return window.WelesDemo.request(path, options);
   const send = token => {
     const headers = new Headers(options.headers || {});
     if (token) headers.set('Authorization', `Bearer ${token}`);
@@ -1078,7 +1079,11 @@ document.getElementById('setup-copy-token').addEventListener('click', async () =
   }
 });
 
-boot();
+if (window.WelesDemo) {
+  startApp().then(() => window.WelesDemo.mount());
+} else {
+  boot();
+}
 
 // Check every 30s in case user just came back from Allegro auth page
 setInterval(() => { if (appReady) checkAuthStatus(); }, 30000);

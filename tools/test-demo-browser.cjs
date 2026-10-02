@@ -1,0 +1,93 @@
+// Install Playwright separately, then: node tools/build-demo.cjs && node tools/test-demo-browser.cjs
+const assert = require('node:assert/strict');
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
+const root = path.resolve(__dirname, '../dist');
+const server = http.createServer((req, res) => {
+  const relative = req.url === '/packing/' ? 'index.html' : req.url.replace(/^\/packing\//, '');
+  const file = path.resolve(root, relative);
+  if (!file.startsWith(root + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+    res.writeHead(404); res.end(); return;
+  }
+  res.setHeader('Content-Type', { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript' }[path.extname(file)] || 'application/octet-stream');
+  res.end(fs.readFileSync(file));
+});
+(async () => {
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true });
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    const page = await context.newPage();
+    const errors = []; const apiRequests = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('request', request => { if (request.url().includes('/api/')) apiRequests.push(request.url()); });
+    page.on('dialog', dialog => dialog.accept());
+    const url = `http://127.0.0.1:${server.address().port}/packing/`;
+    await page.goto(url);
+    await page.locator('.demo-welcome[open]').waitFor();
+    await page.screenshot({ path: '/tmp/weles-demo-welcome.png' });
+    await page.locator('#demo-skip').click();
+    assert.equal(await page.locator('#count-pending').innerText(), '5');
+    assert.equal(await page.locator('#demo-guide').isVisible(), false);
+    await page.reload();
+    await page.locator('#demo-tour').waitFor();
+    assert.equal(await page.locator('.demo-welcome').isVisible(), false);
+    await page.locator('#demo-tour').click();
+    await page.locator('#order-list input[type=checkbox]').first().check();
+    await page.locator('#btn-create-pl').click();
+    await page.locator('.btn-start-pack').first().waitFor();
+    assert.match(await page.locator('#demo-step').innerText(), /2 \/ 5/);
+    await page.locator('.btn-start-pack').first().click();
+    await page.locator('#btn-label').waitFor();
+    assert.match(await page.locator('#demo-step').innerText(), /3 \/ 5/);
+    const popupReady = page.waitForEvent('popup');
+    await page.locator('#btn-label').click();
+    const popup = await popupReady;
+    await page.waitForFunction(() => document.getElementById('btn-label').textContent.includes('✓'));
+    await popup.close();
+    await page.locator('#btn-done').click();
+    await page.waitForFunction(() => document.getElementById('count-done').textContent === '1');
+    assert.match(await page.locator('#demo-step').innerText(), /4 \/ 5/);
+    await page.locator('#btn-zakoncz').click();
+    await page.waitForFunction(() => document.getElementById('demo-step').textContent.includes('5 / 5'));
+    await page.locator('#demo-go').click();
+    await page.locator('.archive-item').waitFor();
+    await page.locator('#demo-reset').click();
+    await page.waitForFunction(() => document.getElementById('count-pending').textContent === '5');
+    assert.match(await page.locator('#demo-step').innerText(), /1 \/ 5/);
+    await page.locator('#demo-skip-guide').click();
+    assert.equal(await page.locator('#demo-guide').isVisible(), false);
+    await page.locator('#demo-tour').click();
+    await page.screenshot({ path: '/tmp/weles-demo-workflow.png' });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({ path: '/tmp/weles-demo-mobile.png' });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile viewport must not overflow');
+    await page.locator('#order-list input[type=checkbox]').first().check();
+    await page.locator('#btn-create-pl').click();
+    await page.locator('.btn-start-pack').first().click();
+    await page.locator('#btn-label').waitFor();
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile packing must not overflow');
+    const fresh = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await fresh.goto(url);
+    await fresh.locator('.demo-welcome[open]').waitFor();
+    await fresh.locator('#demo-start').click();
+    assert.equal(await fresh.locator('#demo-guide').isVisible(), true);
+    await fresh.close();
+    const keyboard = await browser.newPage();
+    await keyboard.goto(url);
+    await keyboard.locator('.demo-welcome[open]').waitFor();
+    await keyboard.keyboard.press('Escape');
+    assert.equal(await keyboard.locator('.demo-welcome').isVisible(), false);
+    assert.equal(await keyboard.locator('#demo-guide').isVisible(), false);
+    await keyboard.close();
+    assert.deepEqual(errors, []);
+    assert.deepEqual(apiRequests, []);
+    console.log('PASS: welcome start/skip/Escape, reload, guide reopen/skip/reset, complete workflow, PDF popup, mobile, nested Pages path, zero API requests.');
+  } finally {
+    if (browser) await browser.close();
+    server.close();
+  }
+})().catch(error => { console.error(error); process.exitCode = 1; });
