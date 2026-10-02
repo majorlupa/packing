@@ -107,6 +107,39 @@ def test_sync_without_authorization_is_401(app_env, client):
     assert "Autoryzuj" in response.json()["detail"]
 
 
+def test_sync_with_a_non_json_success_page_is_502(app_env, client, monkeypatch):
+    """A CDN/gateway HTML page with status 200 must be a 502, never a 500."""
+    import api.allegro as allegro
+
+    class FakeResponse:
+        is_success = True
+        text = "<html>gateway</html>"
+
+        def json(self):
+            raise ValueError("Expecting value")
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, headers=None, params=None):
+            return FakeResponse()
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        allegro.httpx, "AsyncClient",
+        lambda **kwargs: real_client(**kwargs) if "transport" in kwargs else FakeClient(),
+    )
+    allegro._token = "test-token"
+
+    response = client.post("/api/orders/sync")
+    assert response.status_code == 502
+    assert "nieprawidłowe dane" in response.json()["detail"]
+
+
 def _checkout_form(allegro_id):
     return {
         "id": allegro_id,
@@ -643,6 +676,7 @@ def _fake_token_client(monkeypatch, responses):
     import api.allegro as allegro
 
     calls = []
+    real_client = httpx.AsyncClient
 
     class FakeClient:
         async def __aenter__(self):
@@ -655,7 +689,11 @@ def _fake_token_client(monkeypatch, responses):
             calls.append(data)
             return responses[data["grant_type"]]
 
-    monkeypatch.setattr(allegro.httpx, "AsyncClient", lambda **kwargs: FakeClient())
+    # Keep the ASGI test transport working while the fake handles API calls.
+    monkeypatch.setattr(
+        allegro.httpx, "AsyncClient",
+        lambda **kwargs: real_client(**kwargs) if "transport" in kwargs else FakeClient(),
+    )
     return calls
 
 
@@ -728,3 +766,25 @@ def test_invalid_persisted_session_requires_reauthorization(app_env, client, pay
     assert client.get("/api/orders/auth/status").json() == {"authorized": False}
     with pytest.raises(allegro.AllegroNotAuthorized):
         asyncio.run(allegro._access_token())
+
+
+def test_non_json_token_responses_are_allegro_errors(app_env, client, monkeypatch):
+    """A malformed token body must be a 502 on the next API call, not a 500."""
+    import api.allegro as allegro
+
+    class HtmlResponse(_FakeTokenResponse):
+        def json(self):
+            raise ValueError("Expecting value")
+
+    _fake_token_client(monkeypatch, {"authorization_code": HtmlResponse({})})
+    with pytest.raises(allegro.AllegroError):
+        asyncio.run(allegro.exchange_code("code"))
+
+    _fake_token_client(monkeypatch, {"refresh_token": HtmlResponse({})})
+    (app_env.data_dir / "allegro_token.json").write_text(
+        json.dumps({"access_token": "old", "refresh_token": "r1", "expires_at": time.time() - 10}),
+        encoding="utf-8",
+    )
+    response = client.post("/api/orders/sync")
+    assert response.status_code == 502
+    assert "odświeżenie tokenu" in response.json()["detail"]

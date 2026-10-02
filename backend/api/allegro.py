@@ -127,7 +127,7 @@ async def _refresh_access_token() -> None:
         raise AllegroNotAuthorized("Sesja Allegro wygasła. Kliknij 'Autoryzuj Allegro'.")
     if not response.is_success:
         raise AllegroError(f"Allegro refresh token {response.status_code}: {response.text[:300]}")
-    _store_token(response.json())
+    _store_token(_json_object(response, "odświeżenie tokenu"))
 
 
 async def _access_token() -> str:
@@ -180,7 +180,7 @@ async def exchange_code(code: str):
         )
         if not r.is_success:
             raise AllegroError(f"Allegro token exchange {r.status_code}: {r.text[:300]}")
-        _store_token(r.json())
+        _store_token(_json_object(r, "wymiana kodu"))
 
 
 def _error_messages(errors: object) -> str:
@@ -372,7 +372,7 @@ async def fetch_orders(limit: int = 100) -> List[Order]:
             )
             if not r.is_success:
                 raise AllegroError(f"Allegro checkout-forms {r.status_code}: {r.text[:300]}")
-            forms = r.json().get("checkoutForms") or []
+            forms = _json_object(r, "lista zamówień").get("checkoutForms") or []
             for form in forms:
                 try:
                     orders.append(_order_from_form(form))
@@ -390,7 +390,7 @@ async def fetch_orders(limit: int = 100) -> List[Order]:
             )
             if not r.is_success:
                 raise AllegroError(f"Allegro checkout-forms {r.status_code}: {r.text[:300]}")
-            if r.json().get("checkoutForms"):
+            if _json_object(r, "lista zamówień").get("checkoutForms"):
                 raise AllegroError(
                     f"Niepełna synchronizacja: przekroczono limit {MAX_SYNC_PAGES * limit} zamówień. "
                     "Nie zapisano wyników tej synchronizacji."
