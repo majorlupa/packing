@@ -87,9 +87,13 @@ async def revert_to_pending(pl_id: str):
             raise HTTPException(status_code=404, detail="Picking list not found.")
         for oid in pl["order_ids"]:
             order = state["orders"].get(oid)
-            if order is not None:
+            if order is None:
+                continue
+            order["picking_list_id"] = None
+            # A finished order is already packed, shipped and archived-eligible;
+            # reverting the list must not pull it back into Oczekujące.
+            if order["status"] != OrderStatus.done.value:
                 order["status"] = OrderStatus.pending.value
-                order["picking_list_id"] = None
         state["picking_lists"].pop(pl_id, None)
         return {"status": "ok"}
 
@@ -98,17 +102,23 @@ async def revert_to_pending(pl_id: str):
 
 @router.post("/picking-lists/{pl_id}/start-packing")
 async def start_packing(pl_id: str):
-    """Move all orders in a picking list to packing status."""
+    """Move the picking list's orders to packing status.
+
+    A finished order stays in Gotowe: the packing view keeps the list for
+    reprinting, so a stale list must not pull done orders back into the queue.
+    """
 
     def mutate(state):
         pl = state["picking_lists"].get(pl_id)
         if pl is None:
             raise HTTPException(status_code=404, detail="Picking list not found.")
+        moved = []
         for oid in pl["order_ids"]:
             order = state["orders"].get(oid)
-            if order is not None:
+            if order is not None and order["status"] != OrderStatus.done.value:
                 order["status"] = OrderStatus.packing.value
-        return {"status": "ok", "order_ids": pl["order_ids"]}
+                moved.append(oid)
+        return {"status": "ok", "order_ids": moved}
 
     return store.transact(mutate)
 
