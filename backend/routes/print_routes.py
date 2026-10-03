@@ -191,17 +191,31 @@ async def print_label(
 
         try:
             shipment_id = order.shipment_id
+            tracking_number = order.tracking_number
+            created_now = False
             if not shipment_id:
                 shipment_id = await allegro.create_shipment(order, settings["sender"], package)
+                created_now = True
+                tracking_number = await allegro.get_shipment_tracking(shipment_id)
+            elif not tracking_number:
+                # The shipment exists but the waybill was never stored — either
+                # Allegro had not issued it yet at creation time, or this order
+                # predates tracking. Allegro assigns the carrier number shortly
+                # after creation, so re-reading it on a later print recovers it.
                 tracking_number = await allegro.get_shipment_tracking(shipment_id)
 
-                # Persist only the new id and tracking: while Allegro was creating the shipment
-                # the order may have moved on (marked done, reverted, archived), and saving
-                # the whole stale record back would undo that change.
+            # The new id must be saved even when no tracking number came back:
+            # the shipment has already been paid for, and losing the id would let
+            # a second click buy another one. Only the two fields are written —
+            # while Allegro was creating the shipment the order may have moved on
+            # (marked done, reverted, archived), and saving the whole stale record
+            # back would undo that change.
+            if created_now or (tracking_number and tracking_number != order.tracking_number):
                 def remember_shipment(state):
                     stored = state["orders"].get(order_id)
                     if stored is not None:
-                        stored["shipment_id"] = shipment_id
+                        if not stored.get("shipment_id"):
+                            stored["shipment_id"] = shipment_id
                         if tracking_number:
                             stored["tracking_number"] = tracking_number
 
@@ -218,11 +232,29 @@ async def print_label(
 
 @router.get("/orders/{order_id}/shipment")
 async def shipment_info(order_id: str):
-    """Whether a shipment already exists for this order (so the UI can warn before printing)."""
+    """Whether a shipment already exists for this order (so the UI can warn before printing).
+
+    Also the place the browser reads the tracking number after printing. If the
+    shipment exists but the number was never stored, fetch it once and persist
+    it, so re-opening the packing card does not have to wait for Allegro again.
+    """
     order = store.get_order(order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="Order not found.")
-    return {"shipment_id": order.shipment_id, "tracking_number": order.tracking_number}
+    tracking_number = order.tracking_number
+    if order.shipment_id and not tracking_number:
+        try:
+            tracking_number = await allegro.get_shipment_tracking(order.shipment_id)
+        except allegro.AllegroError:
+            tracking_number = None
+        if tracking_number:
+            def remember_tracking(state):
+                stored = state["orders"].get(order_id)
+                if stored is not None and not stored.get("tracking_number"):
+                    stored["tracking_number"] = tracking_number
+
+            store.transact(remember_tracking)
+    return {"shipment_id": order.shipment_id, "tracking_number": tracking_number}
 
 
 @router.get("/orders/{order_id}/invoice")

@@ -248,3 +248,127 @@ def test_dry_run_sync_returns_mock_orders_without_allegro_auth(app_env, client, 
     response2 = client.post('/api/orders/seed-mock')
     assert response2.status_code == 200
     assert response2.json()['added'] == 0
+
+
+# ---- Tracking number ----
+
+
+@pytest.mark.parametrize('payload, expected', [
+    # The carrier number is the one on the label and in carrier tracking.
+    ({'packages': [{'waybill': 'ALLEGRO-1',
+                    'transportingInfo': [{'carrierId': 'INPOST', 'carrierWaybill': 'WWWW123PL'}]}]},
+     'WWWW123PL'),
+    # Allegro documents an empty carrierWaybill on the first read after creation.
+    ({'packages': [{'waybill': 'ALLEGRO-1',
+                    'transportingInfo': [{'carrierId': 'INPOST', 'carrierWaybill': ''}]}]},
+     'ALLEGRO-1'),
+    ({'packages': [{'waybill': 'ALLEGRO-1'}]}, 'ALLEGRO-1'),
+    ({'packages': [{'transportingInfo': [{'carrierWaybill': 'WWWW123PL'}]}]}, 'WWWW123PL'),
+    # Multi-package shipments must not be limited to the first package.
+    ({'packages': [{'waybill': 'A'},
+                   {'waybill': 'B', 'transportingInfo': [{'carrierWaybill': 'SECOND99PL'}]}]},
+     'SECOND99PL'),
+    # Nothing usable yet.
+    ({'packages': []}, None),
+    ({'packages': [{'waybill': '   '}]}, None),
+    ({'packages': 'nonsense'}, None),
+    ({}, None),
+])
+def test_tracking_prefers_the_carrier_waybill(shipment_api, payload, expected):
+    allegro, _, install = shipment_api
+    install(lambda request: httpx.Response(200, json=payload))
+    assert asyncio.run(allegro.get_shipment_tracking('shipment-1')) == expected
+
+
+def test_new_shipment_id_is_saved_even_when_tracking_is_unavailable(app_env, client, monkeypatch):
+    """A paid shipment must never be orphaned: losing the id risks buying a second one."""
+    import api.allegro as allegro
+    app_env.write_state(app_env.default_state({'o-1': sample_order('o-1', 'a-1')}))
+    created = []
+
+    async def create(_order, _sender, _package):
+        created.append('created')
+        return 'shipment-1'
+
+    async def no_tracking(_shipment_id):
+        return None
+
+    async def label(_shipment_id, _page_size):
+        return b'%PDF-1.4 label'
+
+    monkeypatch.setattr(allegro, 'create_shipment', create)
+    monkeypatch.setattr(allegro, 'get_shipment_tracking', no_tracking)
+    monkeypatch.setattr(allegro, 'download_label', label)
+
+    assert client.get('/api/print/orders/o-1/label').status_code == 200
+    state = json.loads(app_env.state_file.read_text(encoding='utf-8'))
+    assert state['orders']['o-1']['shipment_id'] == 'shipment-1'
+    assert state['orders']['o-1']['tracking_number'] is None
+
+    # A second print must reuse the stored id rather than buying another shipment.
+    assert client.get('/api/print/orders/o-1/label').status_code == 200
+    assert created == ['created']
+
+
+def test_reprint_stores_a_waybill_that_was_missing_at_creation(app_env, client, monkeypatch):
+    """An order shipped before the number existed recovers it on the next print."""
+    import api.allegro as allegro
+    app_env.write_state(app_env.default_state({'o-1': sample_order(
+        'o-1', 'a-1', shipment_id='shipment-existing', tracking_number=None)}))
+
+    async def tracking(_shipment_id):
+        return 'WWWW123PL'
+
+    async def label(_shipment_id, _page_size):
+        return b'%PDF-1.4 label'
+
+    monkeypatch.setattr(allegro, 'get_shipment_tracking', tracking)
+    monkeypatch.setattr(allegro, 'download_label', label)
+
+    assert client.get('/api/print/orders/o-1/label').status_code == 200
+    state = json.loads(app_env.state_file.read_text(encoding='utf-8'))
+    assert state['orders']['o-1']['tracking_number'] == 'WWWW123PL'
+    # The existing shipment id must survive untouched.
+    assert state['orders']['o-1']['shipment_id'] == 'shipment-existing'
+    assert client.get('/api/print/orders/o-1/shipment').json()['tracking_number'] == 'WWWW123PL'
+
+
+def test_shipment_info_recovers_a_missing_tracking_number(app_env, client, monkeypatch):
+    import api.allegro as allegro
+    app_env.write_state(app_env.default_state({'o-1': sample_order(
+        'o-1', 'a-1', shipment_id='shipment-existing', tracking_number=None)}))
+
+    async def tracking(_shipment_id):
+        return 'LATE456PL'
+
+    monkeypatch.setattr(allegro, 'get_shipment_tracking', tracking)
+    assert client.get('/api/print/orders/o-1/shipment').json()['tracking_number'] == 'LATE456PL'
+    state = json.loads(app_env.state_file.read_text(encoding='utf-8'))
+    assert state['orders']['o-1']['tracking_number'] == 'LATE456PL'
+
+
+def test_shipment_info_does_not_refetch_a_stored_tracking_number(app_env, client, monkeypatch):
+    """Once stored, the number is served from state without touching Allegro."""
+    import api.allegro as allegro
+    app_env.write_state(app_env.default_state({'o-1': sample_order(
+        'o-1', 'a-1', shipment_id='shipment-existing', tracking_number='KNOWN7PL')}))
+
+    async def forbidden(_shipment_id):
+        raise AssertionError('stored tracking number must not trigger an Allegro call')
+
+    monkeypatch.setattr(allegro, 'get_shipment_tracking', forbidden)
+    assert client.get('/api/print/orders/o-1/shipment').json()['tracking_number'] == 'KNOWN7PL'
+
+
+def test_shipment_info_survives_a_missing_tracking_number(app_env, client, monkeypatch):
+    """A failed lookup must not break the packing view."""
+    import api.allegro as allegro
+    app_env.write_state(app_env.default_state({'o-1': sample_order(
+        'o-1', 'a-1', shipment_id='shipment-existing', tracking_number=None)}))
+
+    async def failing(_shipment_id):
+        return None
+
+    monkeypatch.setattr(allegro, 'get_shipment_tracking', failing)
+    assert client.get('/api/print/orders/o-1/shipment').json() == {
+        'shipment_id': 'shipment-existing', 'tracking_number': None}
