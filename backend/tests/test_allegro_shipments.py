@@ -248,3 +248,64 @@ def test_dry_run_sync_returns_mock_orders_without_allegro_auth(app_env, client, 
     response2 = client.post('/api/orders/seed-mock')
     assert response2.status_code == 200
     assert response2.json()['added'] == 0
+
+
+def test_seed_mock_is_refused_without_dry_run(app_env, client, monkeypatch):
+    """Sample orders must never enter a real queue, whatever the credentials.
+
+    They carry fabricated Allegro ids: the operator cannot ship them, and a
+    later label attempt would send live requests for orders that do not exist.
+    """
+    monkeypatch.delenv('PACKING_SHIPMENT_DRY_RUN', raising=False)
+    response = client.post('/api/orders/seed-mock')
+    assert response.status_code == 409
+    assert 'DRY_RUN' in response.json()['detail']
+    assert client.get('/api/orders/').json() == []
+
+
+def test_seed_mock_is_refused_even_with_a_valid_allegro_session(app_env, client, monkeypatch):
+    """A working Allegro session must not unlock test data."""
+    import api.allegro as allegro
+    monkeypatch.delenv('PACKING_SHIPMENT_DRY_RUN', raising=False)
+    allegro._token, allegro._refresh_token, allegro._expires_at = 'tok', 'ref', 0.0
+    assert client.post('/api/orders/seed-mock').status_code == 409
+    assert client.get('/api/orders/').json() == []
+
+
+def test_sync_does_not_hide_upstream_failure_behind_mock_orders(app_env, client, monkeypatch):
+    """A transient Allegro error in dry run must surface, not become "added: 3"."""
+    import api.allegro as allegro
+    monkeypatch.setenv('PACKING_SHIPMENT_DRY_RUN', '1')
+    allegro._token, allegro._refresh_token, allegro._expires_at = 'tok', 'ref', 0.0
+
+    async def failing(_limit=100):
+        raise allegro.AllegroError('Allegro checkout-forms 503: serwer chwilowo niedostępny')
+
+    monkeypatch.setattr(allegro, 'fetch_orders', failing)
+    response = client.post('/api/orders/sync')
+    assert response.status_code == 502
+    assert '503' in response.json()['detail']
+    assert client.get('/api/orders/').json() == []
+
+
+def test_sync_reports_network_failure_in_dry_run(app_env, client, monkeypatch):
+    """A dropped connection is not an authorization gap; it stays a 502."""
+    import httpx
+
+    import api.allegro as allegro
+    monkeypatch.setenv('PACKING_SHIPMENT_DRY_RUN', '1')
+    allegro._token, allegro._refresh_token, allegro._expires_at = 'tok', 'ref', 0.0
+
+    async def failing(_limit=100):
+        raise httpx.ConnectError('connection refused')
+
+    monkeypatch.setattr(allegro, 'fetch_orders', failing)
+    assert client.post('/api/orders/sync').status_code == 502
+    assert client.get('/api/orders/').json() == []
+
+
+def test_status_reports_dry_run_so_the_ui_can_hide_test_actions(app_env, client, monkeypatch):
+    monkeypatch.delenv('PACKING_SHIPMENT_DRY_RUN', raising=False)
+    assert client.get('/api/orders/status').json()['dry_run'] is False
+    monkeypatch.setenv('PACKING_SHIPMENT_DRY_RUN', '1')
+    assert client.get('/api/orders/status').json()['dry_run'] is True

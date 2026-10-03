@@ -101,6 +101,7 @@ let state = {
   shipmentSettings: null, // sender + package defaults for the packing view
   parcelSizeSaves: new Map(),
   parcelSizeErrors: new Map(),
+  dryRun: false,        // PACKING_SHIPMENT_DRY_RUN — enables test-only actions
 };
 
 // ---- Fetch ----
@@ -134,6 +135,7 @@ async function fetchAll() {
     state.orders = orders;
     state.pickingLists = lists;
     state.shipmentSettings = settings;
+    state.dryRun = Boolean(status && status.dry_run);
     renderStateBanner(status);
   } catch (err) {
     renderStateBanner({ ok: false, message: err.message });
@@ -232,7 +234,12 @@ function renderPending(el) {
   const list = el.querySelector('#order-list');
 
   if (!orders.length) {
-    list.innerHTML = '<p class="empty">Brak oczekujących zamówień. Kliknij "Pobierz zamówienia" lub <button class="btn btn-secondary" id="btn-seed-sample" style="display:inline-block;margin-left:8px;padding:4px 8px;font-size:12px">Wczytaj zamówienia testowe</button>.</p>';
+    // Seeding sample orders is a dry-run affordance. On a real instance the
+    // backend rejects it, so the button must not be offered at all.
+    const seedAction = state.dryRun
+      ? ' lub <button class="btn btn-secondary" id="btn-seed-sample" style="display:inline-block;margin-left:8px;padding:4px 8px;font-size:12px">Wczytaj zamówienia testowe</button>'
+      : '';
+    list.innerHTML = `<p class="empty">Brak oczekujących zamówień. Kliknij "Pobierz zamówienia"${seedAction}.</p>`;
     const seedBtn = list.querySelector('#btn-seed-sample');
     if (seedBtn) {
       seedBtn.addEventListener('click', async () => {

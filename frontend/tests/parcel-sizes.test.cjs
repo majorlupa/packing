@@ -211,3 +211,59 @@ test('new locker with parcel size selected enables label button', () => {
   assert.equal(app.selected(), 'B');
   assert.equal(app.view().querySelector('#btn-label').disabled, false);
 });
+
+// ---- Seed button gating ----
+// The empty pending list may offer sample orders, but only on an instance
+// running in dry run. On a real instance the endpoint answers 409 and the
+// operator must not be offered an action that inserts unshippable records.
+
+// renderPending writes into #order-list, so it needs a container that resolves
+// that selector — the packing harness above only knows #packing-view.
+class PendingContent extends Element {
+  set innerHTML(html) {
+    this.html = html;
+    this.controls = new Map();
+    this.list = new Element();
+    this.list.querySelector = () => null;
+    this.list.querySelectorAll = () => [];
+    this.controls.set('#order-list', this.list);
+  }
+  get innerHTML() { return this.html; }
+  querySelector(selector) { return this.controls.get(selector) || null; }
+}
+
+function pendingSetup(dryRun) {
+  const content = new PendingContent();
+  const calls = [];
+  const context = vm.createContext({
+    document: { getElementById: id => id === 'content' ? content : null },
+    URLSearchParams, setTimeout, clearTimeout,
+    navigator: { clipboard: { writeText: async () => {} } },
+    confirm: () => false,
+    alert(message) { throw new Error(`Unexpected alert: ${message}`); },
+  });
+  vm.runInContext(definitions, context);
+  context.dryRun = dryRun;
+  context.testApi = (path, options) => new Promise((resolve, reject) => {
+    calls.push({ path, options, resolve, reject });
+  });
+  vm.runInContext(`
+    state.orders = [];
+    state.dryRun = dryRun;
+    state.currentQueue = 'pending';
+    api = testApi;
+    renderPending(document.getElementById('content'));
+  `, context);
+  return { calls, html: () => content.querySelector('#order-list').innerHTML };
+}
+
+test('empty pending list offers sample orders in dry run', () => {
+  const app = pendingSetup(true);
+  assert.match(app.html(), /id="btn-seed-sample"/);
+});
+
+test('empty pending list hides sample orders outside dry run', () => {
+  const app = pendingSetup(false);
+  assert.doesNotMatch(app.html(), /btn-seed-sample/);
+  assert.doesNotMatch(app.html(), /Wczytaj zamówienia testowe/);
+});

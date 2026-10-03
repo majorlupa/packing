@@ -219,8 +219,14 @@ def _json_object(response: httpx.Response, what: str) -> dict:
 DRY_RUN_PREFIX = "dry-run-"
 
 
-def _dry_run_enabled() -> bool:
-    """PACKING_SHIPMENT_DRY_RUN=1 exercises the label flow without buying shipments."""
+def dry_run_enabled() -> bool:
+    """PACKING_SHIPMENT_DRY_RUN=1 exercises the label flow without buying shipments.
+
+    This is the single switch that allows fabricated data (dry-run shipment ids,
+    sample orders) to enter the application. Nothing that produces fake orders
+    may run without it: a real queue must never mix test records with Allegro
+    orders the operator has to ship.
+    """
     return os.getenv("PACKING_SHIPMENT_DRY_RUN", "").lower() in ("1", "true", "yes")
 
 
@@ -239,7 +245,7 @@ def _dry_run_label(page_size: str) -> bytes:
 
 async def create_shipment(order, sender: dict, package: dict) -> str:
     """Create a shipment via Allegro shipment management. Returns shipment UUID."""
-    if _dry_run_enabled():
+    if dry_run_enabled():
         logger.warning("PACKING_SHIPMENT_DRY_RUN=1: pomijam tworzenie przesyłki w Allegro (%s)", order.allegro_id)
         return f"{DRY_RUN_PREFIX}{uuid.uuid4()}"
     token = await _access_token()
@@ -449,7 +455,7 @@ MAX_SYNC_PAGES = 10
 
 async def fetch_orders(limit: int = 100) -> List[Order]:
     """Fetch recent READY_FOR_PROCESSING orders from Allegro, page by page."""
-    if _dry_run_enabled() and not is_authorized():
+    if dry_run_enabled() and not is_authorized():
         logger.info("Dry run bez autoryzacji: pobieranie przykładowych zamówień testowych.")
         return _generate_mock_orders()
     token = await _access_token()

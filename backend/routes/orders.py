@@ -1,4 +1,5 @@
 import hmac
+import logging
 import os
 import secrets
 import time
@@ -13,6 +14,7 @@ import api.allegro as allegro
 from api.allegro import to_http_exception
 
 router = APIRouter(prefix="/orders", tags=["orders"])
+logger = logging.getLogger("packing.orders")
 
 # Fields added to Order after the first releases; older records are backfilled on sync.
 BACKFILL_FIELDS = (
@@ -39,8 +41,13 @@ async def list_orders():
 
 @router.get("/status")
 async def state_status():
-    """Health of the state file: whether records had to be skipped or repaired."""
-    return store.state_status()
+    """Health of the state file: whether records had to be skipped or repaired.
+
+    ``dry_run`` travels with it so the browser only offers test-only actions
+    (seeding sample orders) on an instance that is actually in dry-run mode.
+    """
+    status = store.state_status()
+    return {**status, "dry_run": allegro.dry_run_enabled()}
 
 
 @router.post("/sync")
@@ -49,17 +56,19 @@ async def sync_from_allegro():
     try:
         new_orders = await allegro.fetch_orders()
     except allegro.AllegroNotAuthorized as exc:
-        if allegro._dry_run_enabled():
+        # Only an *absent* authorization falls back to sample orders, and only in
+        # dry run. Any other upstream failure must reach the operator: silently
+        # substituting three fake orders for a real sync would hide a broken
+        # Allegro connection behind a healthy-looking "added: 3".
+        if allegro.dry_run_enabled() and not allegro.is_authorized():
+            logger.warning("Brak autoryzacji Allegro w trybie dry run: używam zamówień testowych.")
             new_orders = allegro._generate_mock_orders()
         else:
             raise to_http_exception(exc)
     except (allegro.AllegroError, httpx.HTTPError) as exc:
-        if allegro._dry_run_enabled():
-            new_orders = allegro._generate_mock_orders()
-        else:
-            if isinstance(exc, allegro.AllegroError):
-                raise to_http_exception(exc)
-            raise HTTPException(status_code=502, detail=f"Brak łączności z Allegro: {exc}")
+        if isinstance(exc, allegro.AllegroError):
+            raise to_http_exception(exc)
+        raise HTTPException(status_code=502, detail=f"Brak łączności z Allegro: {exc}")
 
     def mutate(state):
         # Read the archive inside the transaction: a concurrent "end of day" must not be missed.
@@ -93,7 +102,19 @@ async def sync_from_allegro():
 
 @router.post("/seed-mock")
 async def seed_mock_orders():
-    """Seed sample test orders into the queue (convenient for testing when Allegro sandbox is down)."""
+    """Seed sample test orders into the queue.
+
+    Dry-run only. These records carry fabricated Allegro ids, so they cannot be
+    shipped and would otherwise sit in the real queue looking like paid orders.
+    """
+    if not allegro.dry_run_enabled():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Zamówienia testowe są dostępne tylko przy PACKING_SHIPMENT_DRY_RUN=1. "
+                "Nie włączaj tego trybu na produkcji."
+            ),
+        )
     mock_orders = allegro._generate_mock_orders()
 
     def mutate(state):
