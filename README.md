@@ -19,8 +19,12 @@ No SaaS, no per-seat fees — your orders stay on your machine and only talk to 
 - **Sync** pending orders from Allegro (pagination included).
 - **Picking lists** – group selected orders into one walk through the warehouse.
 - **Packing queue** – move picked orders into packing, set parcel dimensions and weight.
+- **Locker sizes** – InPost Paczkomat orders offer gabaryt A/B/C instead of manual
+  dimensions; the matching locker dimensions are sent to Allegro when the label is bought.
 - **Shipment labels** – buy and download an Allegro label (InPost and other carriers via
   Allegro Shipment Management). Labels are created once per order and reused afterwards.
+- **Tracking numbers** – stored per order and shown on the packing card, so you can
+  follow a parcel without leaving the app.
 - **Documents** – combined sales/custom document PDF for a packed order.
 - **Archive** – mark orders done and archive them.
 
@@ -60,6 +64,12 @@ Labels cost money, and the Allegro sandbox is frequently unavailable or tricky t
 Use `PACKING_SHIPMENT_DRY_RUN=true` to exercise the entire application flow (order sync with realistic
 mock orders, picking lists, Paczkomat InPost gabaryt A/B/C selection, shipment creation, tracking numbers,
 and blank PDF labels) without needing a live Allegro connection. Never enable dry run in production.
+
+In dry run the pending view also offers **Wczytaj zamówienia testowe**, which plants three
+sample orders so the workflow can be walked through with an empty queue. That button and
+its endpoint `POST /api/orders/seed-mock` exist only in dry run: the API answers 409
+otherwise, because those orders carry invented Allegro ids that cannot be shipped and
+would sit in a real queue looking like paid ones.
 
 ## Configuration
 

@@ -1,7 +1,8 @@
 # Project findings
 
-> The high/medium items below marked as fixed were addressed in the 2026-09-21 pass —
-> see "Fixed since this review" at the end. Everything unmarked is still open.
+> Items marked **Fixed** were closed by the review passes since 2026-09-21; each
+> says when. Everything unmarked is still open. Counted against `beta` at
+> `da562b5`: 130 backend tests, 12 browser tests.
 
 ## Overview
 
@@ -33,11 +34,23 @@ The old `frontend/Dockerfile` and `frontend/nginx.conf` remain as legacy files b
 
 ### Medium priority
 
-- OAuth tokens are held only in process memory. Restarting the container loses authorization; there is no refresh-token or expiry handling. **Still open.**
-- OAuth callback remains configurable; one-time `state` validation is now enabled. **PKCE is still missing.**
-- Synchronization requests at most 100 `READY_FOR_PROCESSING` orders and does not use Allegro event cursors or pagination, so orders can be missed. **Still open.**
+- OAuth tokens were held only in process memory. **Fixed** — access and refresh
+  tokens are persisted to `data/allegro_token.json` (mode 0600) and reloaded on
+  start, and the access token is refreshed via the refresh token shortly before
+  expiry. A restart no longer loses authorization.
+- OAuth callback remains configurable; one-time `state` validation is enabled. **PKCE is still missing.**
+- Synchronization pages through `READY_FOR_PROCESSING` orders (up to
+  `MAX_SYNC_PAGES` × 100, with an overflow probe that refuses to save a partial
+  sync) but still does not use Allegro event cursors, so orders beyond that
+  horizon can be missed. **Still open.**
 - Allegro requests have no retry/backoff strategy. **Still open** (timeouts and error classes were added).
-- `tracking_number` is displayed by the UI but is never populated by the current sync flow. **Still open** — the UI no longer keys its "no label" warning on it.
+- `tracking_number` is populated when a label is created, and read back from
+  Allegro if it was missing at the time. Note that Allegro returns two
+  identifiers: `packages[].waybill` is Allegro's own, while the carrier number
+  that works with carrier tracking is `packages[].transportingInfo[].carrierWaybill`,
+  which can be an empty string on the first read after creation. **PR #12**
+  prefers the carrier number; the choice is still unverified against a live
+  Allegro account.
 - JSON read/modify/write operations have no locking or transaction protection; concurrent requests can overwrite state. **Fixed** (single lock, one write per operation).
 - CORS is configured with `allow_origins=["*"]`. **Fixed** (`PACKING_CORS_ORIGINS`, defaults to the local UI origins).
 
@@ -64,11 +77,17 @@ Official references:
 ## Recommended next steps
 
 1. Rotate any Allegro and InPost credentials that may have been exposed while the old API was reachable. **Operator action required in the provider dashboards.**
-2. Persist encrypted OAuth credentials with refresh and expiry handling. **Still open.**
-3. Replace 100-item polling with event-based incremental synchronization and pagination. **Still open.**
-4. Add request retries, timeouts, and structured Allegro error handling. **Partly done:** timeouts, typed errors and correct status codes; no retries yet.
-5. Implement tracking-number synchronization. **Still open.**
-6. Add tests for state transitions, concurrent writes, and API response-shape changes. **Done:** `backend/tests/test_api.py` (35 tests).
+2. Add PKCE to the OAuth flow. **Still open.**
+3. Replace page-based polling with event-based incremental synchronization, so orders beyond the `MAX_SYNC_PAGES` horizon cannot be missed. **Still open.**
+4. Add request retries with backoff. **Partly done:** timeouts, typed errors and correct status codes; no retries yet.
+5. Verify the tracking-number choice against a live Allegro account — which
+   identifier the seller actually wants shown, and what happens when
+   `carrierWaybill` is still empty on a later re-read. **PR #12** implements the
+   preference; the behaviour is untested against the real API.
+6. Confirm the locker dimension mapping (A/B/C) against Allegro's own gabaryt
+   limits. The values were added in `da562b5` and have never been checked
+   against the API.
+7. Add tests for state transitions, concurrent writes, and API response-shape changes. **Done:** `backend/tests/test_api.py` (58 tests).
 
 ## Fixed since this review (2026-09-21)
 
