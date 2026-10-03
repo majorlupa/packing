@@ -106,6 +106,12 @@ may only be created once, so a double click must not create two.
 - `PACKING_SHIPMENT_DRY_RUN=true` exercises the whole label flow without calling Allegro:
   `create_shipment` returns a `dry-run-…` id and `download_label` a blank PDF. Intended for the
   beta instance; never enable it in production.
+  This is also the only switch that lets fabricated data into the app: `POST /api/orders/seed-mock`
+  answers 409 without it, and `/api/orders/sync` falls back to sample orders only when Allegro is
+  genuinely unauthorized — every other upstream failure surfaces as 401/502 rather than
+  silently filling the queue with records that cannot be shipped.
+  `GET /api/orders/status` reports the flag as `dry_run` so the browser can hide the
+  sample-orders button instead of offering an action the API rejects.
 - Shipment HTTP contract tests: `python -m pytest backend/tests/test_allegro_shipments.py -q`.
   Browser print-flow tests: `node --test frontend/tests/print.test.cjs`.
 - `backend/api/inpost_shipx.py` is retained for reference but is not used by the current label flow.
@@ -134,6 +140,8 @@ Label creation submits these dimensions to Allegro Shipment Management (`/shipme
 fetches the carrier tracking number (waybill), and downloads the PDF label.
 Selecting a size enables the label button in the packing view.
 
-Offline testing: when the Allegro sandbox is down or unconfigured, running with `PACKING_SHIPMENT_DRY_RUN=true`
-automatically seeds realistic mock orders (both Paczkomat InPost and courier) on sync or via `POST /api/orders/seed-mock`,
-allowing the entire workflow to be tested end-to-end with simulated labels and tracking codes.
+Offline testing: with `PACKING_SHIPMENT_DRY_RUN=true`, `POST /api/orders/seed-mock`
+plants three realistic mock orders (two Paczkomat InPost, one courier) so the whole
+workflow can be tested end-to-end with simulated labels and tracking codes. Sync falls
+back to those orders only when Allegro is not authorized at all; a working session is
+never overridden by mock data.
