@@ -360,8 +360,36 @@ async def download_label(shipment_id: str, page_size: str = "A6") -> bytes:
         return r.content
 
 
+def _waybill_from_shipment(data: dict) -> str | None:
+    """Pick the number a customer can actually track.
+
+    A package carries two identifiers: ``waybill`` is Allegro's own number,
+    while the carrier's number — the one printed on the label and accepted by
+    InPost/DPD tracking — is ``transportingInfo[].carrierWaybill``. Prefer the
+    carrier number and fall back to Allegro's, since a blank carrierWaybill is
+    normal on the first read right after creation.
+    """
+    packages = data.get("packages") or []
+    if not isinstance(packages, list):
+        return None
+    fallback = None
+    for package in packages:
+        if not isinstance(package, dict):
+            continue
+        for entry in package.get("transportingInfo") or []:
+            if not isinstance(entry, dict):
+                continue
+            carrier_waybill = entry.get("carrierWaybill")
+            if isinstance(carrier_waybill, str) and carrier_waybill.strip():
+                return carrier_waybill.strip()
+        own = package.get("waybill")
+        if fallback is None and isinstance(own, str) and own.strip():
+            fallback = own.strip()
+    return fallback
+
+
 async def get_shipment_tracking(shipment_id: str) -> str | None:
-    """Retrieve waybill (tracking number) for a created shipment if available."""
+    """Retrieve the trackable waybill for a shipment, or None if not issued yet."""
     if shipment_id.startswith(DRY_RUN_PREFIX):
         suffix = shipment_id[len(DRY_RUN_PREFIX):][:10].replace("-", "").upper()
         return f"DRY-PL-{suffix}"
@@ -377,12 +405,7 @@ async def get_shipment_tracking(shipment_id: str) -> str | None:
                 headers=headers,
             )
             if r.is_success:
-                data = _json_object(r, "szczegóły przesyłki")
-                packages = data.get("packages") or []
-                if packages and isinstance(packages[0], dict):
-                    waybill = packages[0].get("waybill")
-                    if waybill and isinstance(waybill, str):
-                        return waybill
+                return _waybill_from_shipment(_json_object(r, "szczegóły przesyłki"))
     except Exception as exc:
         logger.warning("Nie udało się pobrać numeru nadania dla %s: %s", shipment_id, exc)
     return None
