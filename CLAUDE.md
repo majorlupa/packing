@@ -126,7 +126,14 @@ New locker orders have no size selected; choosing A, B, or C explicitly saves it
 Pending saves retain their selection and disable further changes across navigation.
 Courier deliveries retain dimension/weight inputs.
 
-Carrier integration for these size choices is deferred: new locker labels are
-disabled in the UI and return 501 from the label endpoint. Existing shipment
-labels can still be downloaded, and their parcel size cannot be changed.
-The GitHub Pages demo remains separate from beta.
+Carrier integration for these size choices maps gabaryty to standard locker dimensions:
+- Gabaryt A: 64 × 38 × 8 cm
+- Gabaryt B: 64 × 38 × 19 cm
+- Gabaryt C: 64 × 38 × 41 cm
+Label creation submits these dimensions to Allegro Shipment Management (`/shipment-management/shipments/create-commands`),
+fetches the carrier tracking number (waybill), and downloads the PDF label.
+Selecting a size enables the label button in the packing view.
+
+Offline testing: when the Allegro sandbox is down or unconfigured, running with `PACKING_SHIPMENT_DRY_RUN=true`
+automatically seeds realistic mock orders (both Paczkomat InPost and courier) on sync or via `POST /api/orders/seed-mock`,
+allowing the entire workflow to be tested end-to-end with simulated labels and tracking codes.

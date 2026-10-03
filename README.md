@@ -56,8 +56,10 @@ First run walks you through the rest:
 3. Setup generates a `PACKING_ACCESS_TOKEN`, shows it once, and saves it. Keep it: your
    browser asks for it on later visits.
 
-Labels cost money, so use `PACKING_SHIPMENT_DRY_RUN=true` to exercise the whole print
-flow with fake `dry-run-…` ids and blank PDFs first. Never enable it in production.
+Labels cost money, and the Allegro sandbox is frequently unavailable or tricky to set up.
+Use `PACKING_SHIPMENT_DRY_RUN=true` to exercise the entire application flow (order sync with realistic
+mock orders, picking lists, Paczkomat InPost gabaryt A/B/C selection, shipment creation, tracking numbers,
+and blank PDF labels) without needing a live Allegro connection. Never enable dry run in production.
 
 ## Configuration
 

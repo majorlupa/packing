@@ -48,10 +48,18 @@ async def sync_from_allegro():
     """Pull new READY_FOR_PROCESSING orders from Allegro and add any not already stored."""
     try:
         new_orders = await allegro.fetch_orders()
-    except allegro.AllegroError as exc:
-        raise to_http_exception(exc)
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"Brak łączności z Allegro: {exc}")
+    except allegro.AllegroNotAuthorized as exc:
+        if allegro._dry_run_enabled():
+            new_orders = allegro._generate_mock_orders()
+        else:
+            raise to_http_exception(exc)
+    except (allegro.AllegroError, httpx.HTTPError) as exc:
+        if allegro._dry_run_enabled():
+            new_orders = allegro._generate_mock_orders()
+        else:
+            if isinstance(exc, allegro.AllegroError):
+                raise to_http_exception(exc)
+            raise HTTPException(status_code=502, detail=f"Brak łączności z Allegro: {exc}")
 
     def mutate(state):
         # Read the archive inside the transaction: a concurrent "end of day" must not be missed.
@@ -81,6 +89,28 @@ async def sync_from_allegro():
 
     added, updated = store.transact(mutate)
     return {"added": added, "updated": updated, "total": len(store.get_orders())}
+
+
+@router.post("/seed-mock")
+async def seed_mock_orders():
+    """Seed sample test orders into the queue (convenient for testing when Allegro sandbox is down)."""
+    mock_orders = allegro._generate_mock_orders()
+
+    def mutate(state):
+        archived_allegro_ids = {entry["allegro_id"] for entry in state["archive"] if entry.get("allegro_id")}
+        index = {v["allegro_id"]: k for k, v in state["orders"].items()}
+        added = 0
+        for order in mock_orders:
+            if order.allegro_id in archived_allegro_ids:
+                continue
+            if order.allegro_id not in index:
+                state["orders"][order.id] = order.model_dump(mode="json")
+                index[order.allegro_id] = order.id
+                added += 1
+        return added
+
+    added = store.transact(mutate)
+    return {"added": added, "total": len(store.get_orders())}
 
 
 @router.post("/zakoncz-dzien")

@@ -48,17 +48,48 @@ def test_size_rejects_couriers_and_existing_shipments(app_env, client, overrides
     assert client.patch('/api/orders/missing/parcel-size', json={'parcel_size': 'B'}).status_code == 404
 
 
-def test_new_locker_labels_do_not_call_carrier(app_env, client, monkeypatch):
+def test_new_locker_labels_require_parcel_size(app_env, client, monkeypatch):
     import api.allegro as allegro
     app_env.write_state(app_env.default_state({'o-1': sample_order(courier='Paczkomat InPost')}))
     async def unexpected(*args):
-        pytest.fail('Deferred locker integration must not call carrier API')
+        pytest.fail('Locker order without size must not call carrier API')
     monkeypatch.setattr(allegro, 'create_shipment', unexpected)
     monkeypatch.setattr(allegro, 'download_label', unexpected)
     response = client.get('/api/print/orders/o-1/label')
-    assert response.status_code == 501
-    assert 'API' in response.json()['detail']
+    assert response.status_code == 400
+    assert 'gabaryt' in response.json()['detail'].lower()
     assert app_env.store.get_order('o-1').shipment_id is None
+
+
+def test_new_locker_labels_create_shipment_with_locker_dimensions(app_env, client, monkeypatch):
+    import api.allegro as allegro
+    app_env.write_state(app_env.default_state({'o-1': sample_order(
+        courier='Paczkomat InPost', parcel_size='A')}))
+    called_package = {}
+
+    async def mock_create(order, sender, package):
+        called_package.update(package)
+        return 'inpost-shipment-123'
+
+    async def mock_tracking(shipment_id):
+        return 'INP-TRACK-999'
+
+    async def mock_download(shipment_id, page_size):
+        return b'%PDF-locker-label'
+
+    monkeypatch.setattr(allegro, 'create_shipment', mock_create)
+    monkeypatch.setattr(allegro, 'get_shipment_tracking', mock_tracking)
+    monkeypatch.setattr(allegro, 'download_label', mock_download)
+
+    response = client.get('/api/print/orders/o-1/label')
+    assert response.status_code == 200
+    assert response.content == b'%PDF-locker-label'
+    assert called_package['length'] == 64.0
+    assert called_package['width'] == 38.0
+    assert called_package['height'] == 8.0
+    order = app_env.store.get_order('o-1')
+    assert order.shipment_id == 'inpost-shipment-123'
+    assert order.tracking_number == 'INP-TRACK-999'
 
 
 def test_existing_locker_label_remains_downloadable(app_env, client, monkeypatch):

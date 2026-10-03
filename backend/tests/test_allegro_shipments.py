@@ -232,3 +232,19 @@ def test_dry_run_label_route_works_without_allegro_authorization(app_env, client
     assert client.get('/api/print/orders/o-1/label').status_code == 200
     state = json.loads(app_env.state_file.read_text(encoding='utf-8'))
     assert state['orders']['o-1']['shipment_id'].startswith('dry-run-')
+    assert state['orders']['o-1']['tracking_number'].startswith('DRY-PL-')
+
+
+def test_dry_run_sync_returns_mock_orders_without_allegro_auth(app_env, client, monkeypatch):
+    """When Allegro sandbox is down or unauthorized, dry run sync seeds mock orders."""
+    monkeypatch.setenv('PACKING_SHIPMENT_DRY_RUN', '1')
+    response = client.post('/api/orders/sync')
+    assert response.status_code == 200
+    data = response.json()
+    assert data['added'] == 3
+    assert data['total'] == 3
+
+    # Calling seed-mock explicitly also works
+    response2 = client.post('/api/orders/seed-mock')
+    assert response2.status_code == 200
+    assert response2.json()['added'] == 0

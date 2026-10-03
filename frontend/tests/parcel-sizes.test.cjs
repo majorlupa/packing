@@ -205,3 +205,9 @@ test('delivery categories consolidate lockers and preserve courier names', () =>
   assert.equal(app.context.deliveryCategory({ delivery_type: 'courier', courier: 'Kurier InPost' }), 'Kurier InPost');
   assert.equal(app.context.deliveryCategory({}), 'Inny');
 });
+
+test('new locker with parcel size selected enables label button', () => {
+  const app = setup([locker('one', { parcel_size: 'B' })]);
+  assert.equal(app.selected(), 'B');
+  assert.equal(app.view().querySelector('#btn-label').disabled, false);
+});

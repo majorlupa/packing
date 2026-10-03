@@ -142,6 +142,13 @@ def save_shipment_settings(body: ShipmentSettings):
     return {"status": "saved"}
 
 
+INPOST_LOCKER_SIZES = {
+    "A": {"length": 64.0, "width": 38.0, "height": 8.0},
+    "B": {"length": 64.0, "width": 38.0, "height": 19.0},
+    "C": {"length": 64.0, "width": 38.0, "height": 41.0},
+}
+
+
 @router.get("/orders/{order_id}/label")
 async def print_label(
     order_id: str,
@@ -153,6 +160,7 @@ async def print_label(
     """Create the shipment once (if needed) and return the label PDF.
 
     Dimensions come from the shipping settings unless this request overrides them.
+    For InPost lockers, dimensions are derived from the order's parcel_size (A/B/C).
     Serialised per order so a double click cannot create two shipments.
     """
     async with _order_lock(order_id):
@@ -160,30 +168,42 @@ async def print_label(
         if order is None:
             raise HTTPException(status_code=404, detail="Order not found.")
 
-        if order.is_inpost_locker and not order.shipment_id:
-            raise HTTPException(
-                status_code=501,
-                detail="Tworzenie etykiet Paczkomat InPost będzie dostępne po podłączeniu API.",
-            )
-
         settings = store.get_shipment_settings()
         package = dict(settings["package"])
         for key, value in (("length", length), ("width", width), ("height", height), ("weight", weight)):
             if value is not None:
                 package[key] = value
 
+        if order.is_inpost_locker and not order.shipment_id:
+            if not order.parcel_size and not (length and width and height):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Wybierz gabaryt paczki (A, B lub C) dla Paczkomatu InPost.",
+                )
+            if order.parcel_size in INPOST_LOCKER_SIZES:
+                dims = INPOST_LOCKER_SIZES[order.parcel_size]
+                if length is None:
+                    package["length"] = dims["length"]
+                if width is None:
+                    package["width"] = dims["width"]
+                if height is None:
+                    package["height"] = dims["height"]
+
         try:
             shipment_id = order.shipment_id
             if not shipment_id:
                 shipment_id = await allegro.create_shipment(order, settings["sender"], package)
+                tracking_number = await allegro.get_shipment_tracking(shipment_id)
 
-                # Persist only the new id: while Allegro was creating the shipment the
-                # order may have moved on (marked done, reverted, archived), and saving
+                # Persist only the new id and tracking: while Allegro was creating the shipment
+                # the order may have moved on (marked done, reverted, archived), and saving
                 # the whole stale record back would undo that change.
                 def remember_shipment(state):
                     stored = state["orders"].get(order_id)
                     if stored is not None:
                         stored["shipment_id"] = shipment_id
+                        if tracking_number:
+                            stored["tracking_number"] = tracking_number
 
                 store.transact(remember_shipment)
 
@@ -202,7 +222,7 @@ async def shipment_info(order_id: str):
     order = store.get_order(order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="Order not found.")
-    return {"shipment_id": order.shipment_id}
+    return {"shipment_id": order.shipment_id, "tracking_number": order.tracking_number}
 
 
 @router.get("/orders/{order_id}/invoice")

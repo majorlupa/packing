@@ -232,7 +232,20 @@ function renderPending(el) {
   const list = el.querySelector('#order-list');
 
   if (!orders.length) {
-    list.innerHTML = '<p class="empty">Brak oczekujących zamówień. Kliknij "Pobierz zamówienia".</p>';
+    list.innerHTML = '<p class="empty">Brak oczekujących zamówień. Kliknij "Pobierz zamówienia" lub <button class="btn btn-secondary" id="btn-seed-sample" style="display:inline-block;margin-left:8px;padding:4px 8px;font-size:12px">Wczytaj zamówienia testowe</button>.</p>';
+    const seedBtn = list.querySelector('#btn-seed-sample');
+    if (seedBtn) {
+      seedBtn.addEventListener('click', async () => {
+        seedBtn.disabled = true;
+        try {
+          await api('/orders/seed-mock', { method: 'POST' });
+          await fetchAll();
+          renderQueue('pending');
+        } catch (err) {
+          reportError('Nie udało się wczytać zamówień testowych', err);
+        }
+      });
+    }
     return;
   }
 
@@ -495,9 +508,9 @@ function renderPackingCard(el) {
 
   const pkg = (state.shipmentSettings && state.shipmentSettings.package) || {};
   const isLocker = order.delivery_type === 'inpost_locker';
-  const lockerLabelUnavailable = isLocker && !order.shipment_id;
   const pendingSize = state.parcelSizeSaves.get(order.id);
   const selectedSize = pendingSize ? pendingSize.value : order.parcel_size;
+  const lockerNeedsSize = isLocker && !order.shipment_id && !selectedSize;
 
   view.innerHTML = `
     <div class="pack-nav">
@@ -515,11 +528,12 @@ function renderPackingCard(el) {
         <button class="btn-copy" data-copy="${esc(order.allegro_id)}" title="Kopiuj ID">⧉</button>
       </div>
       <div class="items">${order.items.map(i => `${i.quantity}x ${esc(i.name)}`).join('<br/>')}</div>
+      ${order.tracking_number ? `<div class="tracking-info" style="color:#65dfb5;margin:8px 0;font-size:13px">📦 Nr przesyłki: <strong>${esc(order.tracking_number)}</strong></div>` : ''}
       ${isLocker ? `
       <fieldset class="parcel-sizes" ${pendingSize || order.shipment_id || order.tracking_number ? 'disabled' : ''}>
         <legend>Paczkomat InPost — gabaryt paczki</legend>
         <div class="parcel-size-options">
-          ${[['A', 'Mała'], ['B', 'Średnia'], ['C', 'Duża']].map(([size, title]) => `
+          ${[['A', 'Mała (8×38×64 cm)'], ['B', 'Średnia (19×38×64 cm)'], ['C', 'Duża (41×38×64 cm)']].map(([size, title]) => `
             <label class="parcel-size-option">
               <input type="radio" name="parcel-size" value="${size}" ${selectedSize === size ? 'checked' : ''}>
               <span><strong>${size}</strong>${title}</span>
@@ -533,10 +547,10 @@ function renderPackingCard(el) {
         <label style="margin-left:12px">Waga (kg)</label>
         <input type="number" class="dim-input" id="dim-wt" value="${esc(pkg.weight ?? 1.0)}" min="0.1" step="0.1">
       </div>`}
-      ${lockerLabelUnavailable ? '<p class="parcel-size-note">Wybierz gabaryt paczki. Tworzenie etykiet Paczkomat InPost będzie dostępne po podłączeniu API.</p>' : ''}
+      ${lockerNeedsSize ? '<p class="parcel-size-note">Wybierz gabaryt paczki (A, B lub C), aby utworzyć etykietę Paczkomat InPost.</p>' : ''}
       <p id="parcel-size-status" class="parcel-size-note" role="status" aria-live="polite">${pendingSize ? 'Zapisywanie gabarytu…' : esc(state.parcelSizeErrors.get(order.id) || '')}</p>
       <div class="pack-buttons">
-        <button class="btn btn-label" id="btn-label" ${lockerLabelUnavailable ? 'disabled' : ''}>🖨 Etykieta kurierska</button>
+        <button class="btn btn-label" id="btn-label" ${lockerNeedsSize || pendingSize ? 'disabled' : ''}>${isLocker ? '🖨 Etykieta Paczkomat' : '🖨 Etykieta kurierska'}</button>
         <button class="btn btn-invoice" id="btn-invoice">🖨 Dokument</button>
         <button class="btn btn-done" id="btn-done">✓ GOTOWE</button>
       </div>
@@ -625,7 +639,19 @@ function renderPackingCard(el) {
       // Only claim the label is printed once the PDF actually came back.
       labelReady = true;
       btn.classList.add('printed');
-      btn.textContent = '✓ Etykieta kurierska';
+      btn.textContent = isLocker ? '✓ Etykieta Paczkomat' : '✓ Etykieta kurierska';
+      try {
+        const info = await api(`/print/orders/${order.id}/shipment`);
+        if (info && info.shipment_id) {
+          order.shipment_id = info.shipment_id;
+          if (info.tracking_number) {
+            order.tracking_number = info.tracking_number;
+            for (const o of [...state.orders, ...state.packingQueue]) {
+              if (o.id === order.id) o.tracking_number = info.tracking_number;
+            }
+          }
+        }
+      } catch { /* best effort */ }
     } catch (err) {
       btn.textContent = previousLabel;
       reportError('Nie udało się pobrać etykiety', err);

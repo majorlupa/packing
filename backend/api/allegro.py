@@ -354,12 +354,104 @@ async def download_label(shipment_id: str, page_size: str = "A6") -> bytes:
         return r.content
 
 
+async def get_shipment_tracking(shipment_id: str) -> str | None:
+    """Retrieve waybill (tracking number) for a created shipment if available."""
+    if shipment_id.startswith(DRY_RUN_PREFIX):
+        suffix = shipment_id[len(DRY_RUN_PREFIX):][:10].replace("-", "").upper()
+        return f"DRY-PL-{suffix}"
+    try:
+        token = await _access_token()
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.allegro.public.v1+json",
+        }
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+            r = await client.get(
+                f"{API_URL}/shipment-management/shipments/{shipment_id}",
+                headers=headers,
+            )
+            if r.is_success:
+                data = _json_object(r, "szczegóły przesyłki")
+                packages = data.get("packages") or []
+                if packages and isinstance(packages[0], dict):
+                    waybill = packages[0].get("waybill")
+                    if waybill and isinstance(waybill, str):
+                        return waybill
+    except Exception as exc:
+        logger.warning("Nie udało się pobrać numeru nadania dla %s: %s", shipment_id, exc)
+    return None
+
+
+def _generate_mock_orders() -> List[Order]:
+    """Generate realistic test orders for testing without a working Allegro sandbox."""
+    return [
+        Order(
+            id=str(uuid.uuid4()),
+            allegro_id="mock-order-paczkomat-1",
+            buyer_name="Jan Kowalski",
+            buyer_address="Paczkomat WAW01M, ul. Marszałkowska 10, 00-001 Warszawa",
+            items=[
+                OrderItem(name="Zestaw wkrętaków precyzyjnych 115w1", quantity=1, unit_price=69.90),
+                OrderItem(name="Mata magnetyczna do serwisu", quantity=1, unit_price=29.00),
+            ],
+            courier="Allegro Paczkomaty InPost",
+            pickup_point="WAW01M",
+            delivery_method_id="b635b71b-4cf7-4f96-857f-1d8f58b0f803",
+            buyer_email="jan.kowalski@example.com",
+            buyer_phone="+48500100200",
+            buyer_street="ul. Marszałkowska 10",
+            buyer_postal_code="00-001",
+            buyer_city="Warszawa",
+            buyer_country="PL",
+        ),
+        Order(
+            id=str(uuid.uuid4()),
+            allegro_id="mock-order-paczkomat-2",
+            buyer_name="Anna Nowak",
+            buyer_address="Paczkomat KRA02N, ul. Floriańska 15, 31-019 Kraków",
+            items=[
+                OrderItem(name="Kabel USB-C - USB-C 100W 2m", quantity=2, unit_price=24.50),
+            ],
+            courier="Paczkomat InPost",
+            pickup_point="KRA02N",
+            delivery_method_id="b635b71b-4cf7-4f96-857f-1d8f58b0f803",
+            buyer_email="anna.nowak@example.com",
+            buyer_phone="+48600200300",
+            buyer_street="ul. Floriańska 15",
+            buyer_postal_code="31-019",
+            buyer_city="Kraków",
+            buyer_country="PL",
+        ),
+        Order(
+            id=str(uuid.uuid4()),
+            allegro_id="mock-order-kurier-3",
+            buyer_name="Piotr Wiśniewski",
+            buyer_address="ul. Piotrkowska 50 m. 4, 90-001 Łódź",
+            items=[
+                OrderItem(name="Uchwyt biurkowy do monitora", quantity=1, unit_price=139.00),
+            ],
+            courier="Allegro Kurier DPD",
+            pickup_point=None,
+            delivery_method_id="d109f3e4-4d20-4e58-bb12-9c3f0b2f8a11",
+            buyer_email="piotr.wisniewski@example.com",
+            buyer_phone="+48700300400",
+            buyer_street="ul. Piotrkowska 50",
+            buyer_postal_code="90-001",
+            buyer_city="Łódź",
+            buyer_country="PL",
+        ),
+    ]
+
+
 # Bound API work; reaching the cap requires an overflow probe before reporting success.
 MAX_SYNC_PAGES = 10
 
 
 async def fetch_orders(limit: int = 100) -> List[Order]:
     """Fetch recent READY_FOR_PROCESSING orders from Allegro, page by page."""
+    if _dry_run_enabled() and not is_authorized():
+        logger.info("Dry run bez autoryzacji: pobieranie przykładowych zamówień testowych.")
+        return _generate_mock_orders()
     token = await _access_token()
     orders: List[Order] = []
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.allegro.public.v1+json"}
