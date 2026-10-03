@@ -131,7 +131,12 @@ Carrier integration for these size choices maps gabaryty to standard locker dime
 - Gabaryt B: 64 × 38 × 19 cm
 - Gabaryt C: 64 × 38 × 41 cm
 Label creation submits these dimensions to Allegro Shipment Management (`/shipment-management/shipments/create-commands`),
-fetches the carrier tracking number (waybill), and downloads the PDF label.
+fetches the tracking number, and downloads the PDF label. Allegro returns two identifiers:
+`packages[].waybill` is its own, while the carrier number usable in carrier tracking is
+`packages[].transportingInfo[].carrierWaybill`, which can be an empty string on the first
+read after creation — so the carrier number is preferred and `waybill` is the fallback.
+A shipment whose number was missing is recovered from Allegro on the next label print or
+via `GET /print/orders/{id}/shipment`.
 Selecting a size enables the label button in the packing view.
 
 Offline testing: when the Allegro sandbox is down or unconfigured, running with `PACKING_SHIPMENT_DRY_RUN=true`
