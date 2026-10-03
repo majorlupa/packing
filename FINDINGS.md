@@ -1,8 +1,8 @@
 # Project findings
 
 > Items marked **Fixed** were closed by the review passes since 2026-09-21; each
-> says when. Everything unmarked is still open. Counted against `beta` at
-> `da562b5`: 130 backend tests, 12 browser tests.
+> says when. Everything unmarked is still open. Counted against `beta` after
+> PRs #11–#13: 149 backend tests, 14 browser tests.
 
 ## Overview
 
