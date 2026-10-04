@@ -7,12 +7,11 @@ sales/custom document PDF.
 
 No SaaS, no per-seat fees — your orders stay on your machine and only talk to Allegro's API.
 
-> **Status: work in progress.** The code runs, but it is **not finished**. Label
-> creation, order sync and document generation are still being verified against the
-> Allegro **sandbox**, which the author does not have working yet — so treat every
-> part of the queue workflow as unproven until that lands. Shipping labels cost real
-> money, and there is no production-readiness guarantee. Use it to look around, not to
-> run your shop. Issues and pull requests welcome.
+> **Status: working beta.** Allegro order sync, shipment creation and label download
+> have been confirmed working in the **sandbox** for **Allegro One Box, DPD**
+> (2026-10-04). **InPost shipment creation and labels still need testing.** Production
+> use and other delivery methods are not yet verified. Shipping labels in production
+> cost real money. Issues and pull requests welcome.
 
 ## What it does
 
@@ -37,6 +36,8 @@ set aside instead of taking the whole queue down.
 
 - Docker with Compose
 - Allegro developer app (`https://developer.allegro.pl`) with Client ID and Client Secret
+- App permissions: `allegro:api:orders:read`, `allegro:api:shipments:read` and
+  `allegro:api:shipments:write` (order sync, shipment/label access and shipment creation).
 
 ## Quick start
 
@@ -55,13 +56,25 @@ First run walks you through the rest:
 
 1. Enter the Allegro Client ID and Client Secret. They are written to `.env` on the host
    and applied immediately.
-2. Use **Autoryzuj Allegro** to connect the seller account (OAuth2, redirect URI
+2. Enable the required permissions in your Allegro developer app, then use
+   **Autoryzuj Allegro** to connect the seller account (OAuth2, redirect URI
    `http://localhost:3001/api/orders/auth/callback` – register it in your Allegro app).
 3. Setup generates a `PACKING_ACCESS_TOKEN`, shows it once, and saves it. Keep it: your
    browser asks for it on later visits.
 
-Labels cost money, and the Allegro sandbox is frequently unavailable or tricky to set up.
-Use `PACKING_SHIPMENT_DRY_RUN=true` to exercise the entire application flow (order sync with realistic
+For sandbox testing, register and edit your app in
+[sandbox application management](https://apps.developer.allegro.pl.allegrosandbox.pl/)
+and keep `ALLEGRO_SANDBOX=true`. Under shipping permissions, enable **Odczyt przesyłek,
+etykiet i protokołów** and **Zarządzanie przesyłkami**. If you change permissions after
+connecting, click **Połącz ponownie Allegro** and approve the updated access.
+
+If order sync works but shipping returns **403 — No access to the specified resource**
+(shown as HTTP 502 by the app), check those shipping permissions and reconnect.
+This resolved the sandbox shipping failure during verification. See
+[Allegro's shipping permission documentation](https://developer.allegro.pl/news/udostepnilismy-nowe-zasoby-do-tworzenia-i-zarzadzania-przesylkami-w-ramach-wysylam-z-allegro-BvGe1loe7tk).
+
+To test without an Allegro connection or create simulated labels,
+use `PACKING_SHIPMENT_DRY_RUN=true` to exercise the entire application flow (order sync with realistic
 mock orders, picking lists, Paczkomat InPost gabaryt A/B/C selection, shipment creation, tracking numbers,
 and blank PDF labels) without needing a live Allegro connection. Never enable dry run in production.
 
@@ -94,5 +107,6 @@ detail.
 ## Disclaimer
 
 This is an independent, unfinished tool, not affiliated with or endorsed by Allegro.
-Back up `data/`, keep `PACKING_SHIPMENT_DRY_RUN=true` while testing, and verify a
-label before handing a parcel to the courier.
+Back up `data/`, use `PACKING_SHIPMENT_DRY_RUN=true` for simulated shipments, and
+leave it disabled when verifying actual sandbox labels. Verify a label before
+handing a parcel to the courier.

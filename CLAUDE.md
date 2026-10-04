@@ -32,6 +32,13 @@ and the redirect URI to register in Allegro. Saving writes only those keys to th
 preserves the other settings, and applies the credentials immediately. Then use
 "Autoryzuj Allegro" to connect the seller account through OAuth.
 
+Enable `allegro:api:orders:read`, `allegro:api:shipments:read` and
+`allegro:api:shipments:write` in the developer app. For sandbox use, manage the app
+at https://apps.developer.allegro.pl.allegrosandbox.pl/ and keep `ALLEGRO_SANDBOX=true`.
+After changing permissions, use "Połącz ponownie Allegro" to authorize again.
+The authorization button stays available with a saved session so a failing session
+or missing permissions can be recovered without deleting the persisted token.
+
 If no valid `PACKING_ACCESS_TOKEN` exists, setup generates one, saves it in `.env`, and
 shows it once. Save this token for future visits. If a token was already configured, setup
 requires it before saving. The browser holds the token only for the page session and asks
@@ -94,6 +101,14 @@ may only be created once, so a double click must not create two.
 
 ## Integration notes
 
+- **Sandbox verification (2026-10-04):** order sync, shipment creation and label
+  download confirmed working for Allegro One Box, DPD. InPost shipping remains
+  untested; production and other delivery methods are not yet verified.
+- A sandbox shipping failure returned `403 AccessDenied` from delivery proposals
+  and delivery services while checkout-form access returned 200. Enabling shipping
+  read/write permissions in the developer app and reauthorizing resolved it.
+  The app surfaces this upstream failure as HTTP 502. Check shipping scopes first
+  when order access succeeds but shipping is denied.
 - Allegro access and refresh tokens are persisted to `data/allegro_token.json` (mode 0600).
   A restart preserves the session, but invalidates any unfinished OAuth authorization flow.
 

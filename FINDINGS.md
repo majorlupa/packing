@@ -10,6 +10,21 @@ The application is a FastAPI backend with a static HTML/JavaScript frontend. It 
 
 State is stored in `data/state.json`; uploaded custom documents are stored in the same data volume.
 
+## Sandbox shipment verification (2026-10-04)
+
+- Order sync and checkout-form access returned HTTP 200 for the sandbox seller.
+- Shipment creation and label download for **Allegro One Box, DPD** were confirmed
+  working by the operator after enabling shipping permissions and reauthorizing.
+- Before that permissions change, delivery proposals and delivery services returned
+  `403 AccessDenied` / `No access to the specified resource`; the app label endpoint
+  returned HTTP 502. The saved token lacked `allegro:api:shipments:read` and
+  `allegro:api:shipments:write`. Both permissions must be enabled in the developer
+  app, followed by a new OAuth authorization.
+- The frontend keeps the authorization button available as **Połącz ponownie
+  Allegro** when a saved session exists, allowing permissions/session recovery.
+- **InPost shipment creation and label download remain untested.** Production,
+  other delivery methods and carrier tracking-number behavior remain unverified.
+
 ## Container consolidation
 
 The previous deployment used an Nginx frontend container and a FastAPI backend container. It is now consolidated into one `packing` service:
