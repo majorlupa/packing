@@ -15,6 +15,8 @@ label. The demo stores `delivery_type: inpost_locker` and `parcel_size` for a fu
 API integration. Live carrier integration is not implemented.
 
 Custom PDF uploads are unavailable in the demo and show an explanatory message.
+The Allegro authorization/reconnect button is hidden because the demo has no
+Allegro connection. The shared app keeps that button available for real accounts.
 
 ## Preview
 
