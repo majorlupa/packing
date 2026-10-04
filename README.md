@@ -101,8 +101,13 @@ python -m pip install -r backend/requirements.txt -r backend/requirements-dev.tx
 PACKING_ENV_FILE=.env python -m pytest backend/tests -q      # never calls Allegro
 ```
 
-`CLAUDE.md` documents the architecture, persistence rules, and integration notes in
-detail.
+The backend serves the static frontend and API on port 3001. State and Allegro
+tokens are persisted in `data/` across container restarts.
+
+## License
+
+Licensed under the [MIT License](LICENSE). Free to use, modify and distribute,
+including commercially, provided the copyright and license notices are retained.
 
 ## Disclaimer
 
