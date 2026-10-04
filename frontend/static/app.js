@@ -999,7 +999,9 @@ setInterval(() => {
 async function checkAuthStatus() {
   try {
     const data = await api('/orders/auth/status');
-    document.getElementById('btn-auth').style.display = data.authorized ? 'none' : 'block';
+    const button = document.getElementById('btn-auth');
+    button.style.display = 'block';
+    button.textContent = data.authorized ? 'Połącz ponownie Allegro' : 'Autoryzuj Allegro';
   } catch {}
 }
 
