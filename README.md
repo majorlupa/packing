@@ -52,6 +52,12 @@ docker compose up -d
 
 Open <http://localhost:3001>.
 
+The application starts in Polish. Use the **Polski / English** selector, available
+from onboarding onward, to change the interface language. The choice is remembered
+in your browser and also applies to application-generated documents and messages.
+Order data, custom document content, and carrier-provided shipment labels are not
+translated.
+
 First run walks you through the rest:
 
 1. Enter the Allegro Client ID and Client Secret. They are written to `.env` on the host
@@ -99,7 +105,14 @@ so the file stays the single source of truth across restarts and updates. Keep i
 ```sh
 python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
 PACKING_ENV_FILE=.env python -m pytest backend/tests -q      # never calls Allegro
+node --test frontend/tests/*.test.cjs                       # UI and language regressions
 ```
+
+The UI catalogs are in `frontend/static/app.js`; backend messages and locale
+negotiation are in `backend/localization.py`. Every application API request sends
+`Accept-Language: pl` or `en`, including document requests and OAuth initiation.
+Keep operator/order data and upstream carrier text outside the translation catalogs.
+Language switching updates text in place rather than rebuilding forms or queues.
 
 The backend serves the static frontend and API on port 3001. State and Allegro
 tokens are persisted in `data/` across container restarts.

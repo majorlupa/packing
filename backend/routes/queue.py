@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 from typing import List, Literal
 import uuid
 import store
+from localization import t
 from models.order import Order, OrderStatus, PickingList
 
 router = APIRouter(tags=["queue"])
@@ -39,7 +40,7 @@ async def rename_picking_list(pl_id: str, req: RenamePickingListRequest):
     def mutate(state):
         pl = state["picking_lists"].get(pl_id)
         if pl is None:
-            raise HTTPException(status_code=404, detail="Picking list not found.")
+            raise HTTPException(status_code=404, detail=t("error.picking_list_not_found"))
         pl["name"] = req.name
         return pl
 
@@ -54,7 +55,7 @@ async def create_picking_list(req: CreatePickingListRequest):
     def mutate(state):
         for oid in order_ids:
             if oid not in state["orders"]:
-                raise HTTPException(status_code=404, detail=f"Order {oid} not found.")
+                raise HTTPException(status_code=404, detail=t("orders.bad_order_id", order_id=oid))
         # Selecting an order that sits in another list moves it instead of leaving a dangling id.
         for oid in order_ids:
             _detach_from_lists(state, oid)
@@ -62,7 +63,7 @@ async def create_picking_list(req: CreatePickingListRequest):
         state["picking_list_counter"] = int(state.get("picking_list_counter") or 0) + 1
         pl = PickingList(
             id=str(uuid.uuid4()),
-            name=req.name or f"Lista #{state['picking_list_counter']}",
+            name=req.name or t("picking.default_name", number=state["picking_list_counter"]),
             order_ids=order_ids,
         )
         state["picking_lists"][pl.id] = pl.model_dump(mode="json")
@@ -84,7 +85,7 @@ async def revert_to_pending(pl_id: str):
     def mutate(state):
         pl = state["picking_lists"].get(pl_id)
         if pl is None:
-            raise HTTPException(status_code=404, detail="Picking list not found.")
+            raise HTTPException(status_code=404, detail=t("error.picking_list_not_found"))
         for oid in pl["order_ids"]:
             order = state["orders"].get(oid)
             if order is None:
@@ -111,7 +112,7 @@ async def start_packing(pl_id: str):
     def mutate(state):
         pl = state["picking_lists"].get(pl_id)
         if pl is None:
-            raise HTTPException(status_code=404, detail="Picking list not found.")
+            raise HTTPException(status_code=404, detail=t("error.picking_list_not_found"))
         moved = []
         for oid in pl["order_ids"]:
             order = state["orders"].get(oid)
@@ -127,7 +128,7 @@ def _set_status(order_id: str, status: OrderStatus, clear_list: bool = False):
     def mutate(state):
         order = state["orders"].get(order_id)
         if order is None:
-            raise HTTPException(status_code=404, detail="Order not found.")
+            raise HTTPException(status_code=404, detail=t("error.order_not_found"))
         order["status"] = status.value
         if clear_list:
             order["picking_list_id"] = None
@@ -162,12 +163,12 @@ async def set_parcel_size(order_id: str, req: ParcelSizeRequest) -> dict[str, st
     def mutate(state: dict) -> dict[str, str]:
         data = state["orders"].get(order_id)
         if data is None:
-            raise HTTPException(status_code=404, detail="Order not found.")
+            raise HTTPException(status_code=404, detail=t("error.order_not_found"))
         order = Order.model_validate(data)
         if not order.is_inpost_locker:
-            raise HTTPException(status_code=400, detail="Gabaryt A/B/C dotyczy tylko Paczkomat InPost.")
+            raise HTTPException(status_code=400, detail=t("parcel.locker_only"))
         if order.shipment_id or order.tracking_number:
-            raise HTTPException(status_code=409, detail="Przesyłka już istnieje — nie można zmienić gabarytu.")
+            raise HTTPException(status_code=409, detail=t("parcel.shipment_exists"))
         data["parcel_size"] = req.parcel_size
         return {"parcel_size": req.parcel_size}
 

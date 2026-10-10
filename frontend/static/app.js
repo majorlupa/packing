@@ -3,12 +3,577 @@ let accessToken = '';
 let accessTokenPrompt = null;
 let appReady = false;
 
+// ---- i18n catalog ----
+// Every app-owned string lives here. Keys are flat and grouped by area. A value
+// is either a string (with {placeholders}) or a plural object keyed by
+// Intl.PluralRules categories (pl: one/few/many, en: one/other). Both languages
+// must define the same keys; a missing entry falls back to Polish and the
+// catalog-parity test turns red.
+//
+// Carrier names, product names and any other value that comes from Allegro or an
+// external API are NEVER listed here: they pass through untouched. Only strings
+// the application itself owns are translated.
+const DEFAULT_LANGUAGE = 'pl';
+const SUPPORTED_LANGUAGES = ['pl', 'en'];
+const LANGUAGE_STORAGE_KEY = 'weles.lang';
+const LOCALES = { pl: 'pl-PL', en: 'en-GB' };
+
+const MESSAGES = {
+  pl: {
+    'nav.queues': 'Kolejki',
+    'nav.pending': 'Oczekujące',
+    'nav.picking': 'Kompletowanie',
+    'nav.packing': 'Pakowanie',
+    'nav.done': 'Gotowe',
+    'nav.sync': 'Pobierz zamówienia',
+    'nav.authorizeAllegro': 'Autoryzuj Allegro',
+    'nav.reconnectAllegro': 'Połącz ponownie Allegro',
+    'nav.endDay': 'Zakończ dzień',
+    'nav.settings': 'Ustawienia',
+    'nav.language': 'Język',
+
+    'common.save': 'Zapisz',
+    'common.cancel': 'Anuluj',
+    'common.delete': 'Usuń',
+    'common.revertTitle': 'Cofnij do oczekujących',
+    'common.copyId': 'Kopiuj ID',
+    'common.errorPrefix': 'Błąd',
+
+    'unit.order': { one: 'zamówienie', few: 'zamówienia', many: 'zamówień' },
+    'unit.product': { one: 'produkt', few: 'produkty', many: 'produktów' },
+    'unit.transaction': { one: 'transakcja', few: 'transakcje', many: 'transakcji' },
+
+    'category.locker': 'Paczkomat InPost',
+    'category.other': 'Inny',
+
+    'banner.problem': 'Problem ze stanem aplikacji.',
+    'banner.quarantined': {
+      one: '{n} rekord pominięto — dane nie przechodzą walidacji.',
+      few: '{n} rekordy pominięto — dane nie przechodzą walidacji.',
+      many: '{n} rekordów pominięto — dane nie przechodzą walidacji.',
+    },
+
+    'token.prompt': 'Podaj PACKING_ACCESS_TOKEN z pliku .env:',
+    'token.required': 'Token dostępu jest wymagany.',
+
+    'print.popupBlocked': 'Przeglądarka blokuje okno wydruku. Zezwól na wyskakujące okna i spróbuj ponownie.',
+
+    'pending.title': 'Oczekujące zamówienia',
+    'pending.createList': 'Utwórz listę kompletowania',
+    'pending.selectHint': 'Zaznacz produkty',
+    'pending.emptyLead': 'Brak oczekujących zamówień. Kliknij "Pobierz zamówienia"',
+    'pending.emptyOr': 'lub',
+    'pending.seedSample': 'Wczytaj zamówienia testowe',
+    'pending.transactionCount': { one: '{n} transakcja', few: '{n} transakcje', many: '{n} transakcji' },
+    'err.createList': 'Nie udało się utworzyć listy',
+    'err.seedSample': 'Nie udało się wczytać zamówień testowych',
+
+    'picking.title': 'Kompletowanie',
+    'picking.empty': 'Brak aktywnych list kompletowania.',
+    'picking.orderCount': { one: '{n} zamówienie', few: '{n} zamówienia', many: '{n} zamówień' },
+    'picking.rename': 'Zmień nazwę',
+    'picking.print': 'Drukuj listę',
+    'picking.start': 'Pakuj →',
+    'picking.printTitle': 'Lista: {name}',
+    'picking.printProduct': 'Produkt',
+    'picking.printQty': 'Ilość',
+    'err.rename': 'Nie udało się zmienić nazwy',
+    'err.revertList': 'Nie udało się cofnąć listy',
+    'err.startPacking': 'Nie udało się przenieść do pakowania',
+
+    'packing.title': 'Pakowanie',
+    'packing.empty': 'Brak zamówień do pakowania. Przesuń listę kompletowania do pakowania.',
+    'packing.prev': 'Poprzednie',
+    'packing.next': 'Następne',
+    'packing.trackingLabel': 'Nr przesyłki:',
+    'packing.lockerLegend': 'Paczkomat InPost — gabaryt paczki',
+    'packing.sizeA': 'Mała (8×38×64 cm)',
+    'packing.sizeB': 'Średnia (19×38×64 cm)',
+    'packing.sizeC': 'Duża (41×38×64 cm)',
+    'packing.dims': 'Wymiary (cm)',
+    'packing.weight': 'Waga (kg)',
+    'packing.selectSizeNote': 'Wybierz gabaryt paczki (A, B lub C), aby utworzyć etykietę Paczkomat InPost.',
+    'packing.savingSize': 'Zapisywanie gabarytu…',
+    'packing.saveError': 'Nie udało się zapisać gabarytu: {detail}',
+    'packing.labelLocker': 'Etykieta Paczkomat',
+    'packing.labelCourier': 'Etykieta kurierska',
+    'packing.invoice': 'Dokument',
+    'packing.done': 'GOTOWE',
+    'packing.generatingLabel': 'Generowanie etykiety…',
+    'packing.doneConfirm': 'Etykieta nie wydrukowana — czy na pewno chcesz oznaczyć jako gotowe?',
+    'err.revertOrder': 'Nie udało się cofnąć zamówienia',
+    'err.copyId': 'Nie udało się skopiować ID',
+    'err.label': 'Nie udało się pobrać etykiety',
+    'err.document': 'Nie udało się wygenerować dokumentu',
+    'err.done': 'Nie udało się oznaczyć jako gotowe',
+
+    'done.title': 'Gotowe ({n})',
+    'done.empty': 'Brak ukończonych zamówień.',
+    'done.labelCreated': 'Etykieta utworzona',
+    'done.labelMissing': '— brak etykiety —',
+    'done.undo': 'Cofnij',
+
+    'settings.title': 'Ustawienia',
+    'settings.tabDocuments': 'Dokumenty',
+    'settings.tabShipping': 'Wysyłka',
+    'settings.tabArchive': 'Archiwum',
+    'settings.docsIntro': 'Zaznacz pola które mają pojawiać się na wydruku.',
+    'inv.buyerName': 'Nazwa kupującego',
+    'inv.buyerAddress': 'Adres kupującego',
+    'inv.items': 'Lista produktów',
+    'inv.price': 'Cena za sztukę',
+    'inv.courier': 'Kurier',
+    'inv.pickupPoint': 'Punkt odbioru (paczkomat)',
+    'inv.allegroId': 'Numer zamówienia Allegro',
+    'inv.freeTextLabel': 'Tekst własny (maks. 160 znaków)',
+    'inv.freeTextPlaceholder': 'np. Dziękujemy za zakup!',
+    'settings.customDocDesc': 'Własny dokument PDF — drukowany przyciskiem "Własny dokument" podczas pakowania.',
+    'settings.docUploaded': 'Dokument wgrany',
+    'settings.docNone': 'Brak dokumentu',
+    'settings.docReplace': 'Zastąp plik',
+    'settings.docChoose': 'Wybierz plik PDF',
+    'settings.docUploadedOk': 'Wgrano pomyślnie',
+    'settings.saved': 'Zapisano',
+    'settings.error': 'Błąd',
+    'err.docDelete': 'Nie udało się usunąć dokumentu',
+    'settings.shippingIntro': 'Dane nadawcy, odbiorcy i punktu odbioru pobieramy automatycznie z Allegro. Adres nadawcy ustaw w książce adresowej Wysyłam z Allegro.',
+    'settings.defaultPackageHtml': '<strong>Domyślna paczka</strong> — wartości startowe w widoku pakowania.',
+    'sh.length': 'Długość (cm)',
+    'sh.width': 'Szerokość (cm)',
+    'sh.height': 'Wysokość (cm)',
+    'sh.weight': 'Waga (kg)',
+    'sh.pageSize': 'Rozmiar etykiety',
+    'sh.pdfNote': 'Etykiety są generowane w formacie PDF do wydruku w przeglądarce.',
+    'settings.archiveCount': {
+      one: '{n} zarchiwizowane zamówienie.',
+      few: '{n} zarchiwizowane zamówienia.',
+      many: '{n} zarchiwizowanych zamówień.',
+    },
+    'settings.archiveEmpty': 'Archiwum jest puste.',
+    'settings.archiveNoDate': 'brak daty',
+
+    'day.confirm': 'Zakończyć dzień i zarchiwizować wszystkie zamówienia z Gotowe?',
+    'day.noneReady': 'Brak zamówień w Gotowe.',
+    'day.missingLabels': {
+      one: '{n} zamówienie nie ma utworzonej etykiety. Czy na pewno chcesz zakończyć dzień?',
+      few: '{n} zamówienia nie mają utworzonej etykiety. Czy na pewno chcesz zakończyć dzień?',
+      many: '{n} zamówień nie ma utworzonej etykiety. Czy na pewno chcesz zakończyć dzień?',
+    },
+    'err.endDay': 'Nie udało się zakończyć dnia',
+    'err.sync': 'Synchronizacja nie powiodła się',
+
+    'setup.title': 'Połącz swoje Allegro',
+    'setup.intro': 'Skonfiguruj dostęp do Allegro, aby pobierać zamówienia i przygotowywać przesyłki.',
+    'setup.checking': 'Sprawdzanie konfiguracji…',
+    'setup.createAppHtml': 'Utwórz aplikację w <a href="https://developer.allegro.pl/" target="_blank" rel="noopener noreferrer">panelu deweloperskim Allegro</a> i skopiuj jej dane poniżej.',
+    'setup.redirectLabel': 'Adres przekierowania aplikacji Allegro:',
+    'setup.envSandbox': 'Środowisko: Allegro Sandbox. Użyj danych aplikacji testowej.',
+    'setup.envProduction': 'Środowisko: Allegro. Użyj danych aplikacji produkcyjnej.',
+    'setup.saveNote': 'Dane zostaną zapisane na serwerze. Client Secret nie będzie wyświetlany ponownie.',
+    'setup.submit': 'Zapisz i kontynuuj',
+    'setup.savedTitle': 'Dane Allegro zapisane',
+    'setup.saveTokenNote': 'Zachowaj poniższy token dostępu w bezpiecznym miejscu. Weles poprosi o niego przy kolejnym otwarciu aplikacji.',
+    'setup.accessTokenLabel': 'Token dostępu Weles',
+    'setup.copyToken': 'Kopiuj token',
+    'setup.continue': 'Przejdź do aplikacji',
+    'setup.retry': 'Sprawdź ponownie',
+    'setup.saving': 'Zapisywanie…',
+    'setup.savedMsg': 'Dane Allegro zapisane. Zachowaj token dostępu przed przejściem do aplikacji.',
+    'setup.saveFailed': 'Nie udało się zapisać konfiguracji.',
+    'setup.statusFailed': 'Nie udało się sprawdzić konfiguracji.',
+    'setup.tokenCopied': 'Token skopiowany. Zachowaj go w bezpiecznym miejscu.',
+    'setup.tokenCopyManual': 'Skopiuj zaznaczony token i zachowaj go w bezpiecznym miejscu.',
+  },
+
+  en: {
+    'nav.queues': 'Queues',
+    'nav.pending': 'Pending',
+    'nav.picking': 'Picking',
+    'nav.packing': 'Packing',
+    'nav.done': 'Done',
+    'nav.sync': 'Fetch orders',
+    'nav.authorizeAllegro': 'Connect Allegro',
+    'nav.reconnectAllegro': 'Reconnect Allegro',
+    'nav.endDay': 'End day',
+    'nav.settings': 'Settings',
+    'nav.language': 'Language',
+
+    'common.save': 'Save',
+    'common.cancel': 'Cancel',
+    'common.delete': 'Delete',
+    'common.revertTitle': 'Return to pending',
+    'common.copyId': 'Copy ID',
+    'common.errorPrefix': 'Error',
+
+    'unit.order': { one: 'order', other: 'orders' },
+    'unit.product': { one: 'product', other: 'products' },
+    'unit.transaction': { one: 'transaction', other: 'transactions' },
+
+    'category.locker': 'InPost parcel locker',
+    'category.other': 'Other',
+
+    'banner.problem': 'There is a problem with the application state.',
+    'banner.quarantined': {
+      one: '{n} record was skipped — it failed validation.',
+      other: '{n} records were skipped — they failed validation.',
+    },
+
+    'token.prompt': 'Enter the PACKING_ACCESS_TOKEN from the .env file:',
+    'token.required': 'An access token is required.',
+
+    'print.popupBlocked': 'The browser is blocking the print window. Allow pop-ups and try again.',
+
+    'pending.title': 'Pending orders',
+    'pending.createList': 'Create picking list',
+    'pending.selectHint': 'Select products',
+    'pending.emptyLead': 'No pending orders. Click "Fetch orders"',
+    'pending.emptyOr': 'or',
+    'pending.seedSample': 'Load sample orders',
+    'pending.transactionCount': { one: '{n} transaction', other: '{n} transactions' },
+    'err.createList': 'Could not create the list',
+    'err.seedSample': 'Could not load sample orders',
+
+    'picking.title': 'Picking',
+    'picking.empty': 'No active picking lists.',
+    'picking.orderCount': { one: '{n} order', other: '{n} orders' },
+    'picking.rename': 'Rename',
+    'picking.print': 'Print list',
+    'picking.start': 'Pack →',
+    'picking.printTitle': 'List: {name}',
+    'picking.printProduct': 'Product',
+    'picking.printQty': 'Quantity',
+    'err.rename': 'Could not rename the list',
+    'err.revertList': 'Could not revert the list',
+    'err.startPacking': 'Could not move to packing',
+
+    'packing.title': 'Packing',
+    'packing.empty': 'No orders to pack. Move a picking list to packing.',
+    'packing.prev': 'Previous',
+    'packing.next': 'Next',
+    'packing.trackingLabel': 'Tracking number:',
+    'packing.lockerLegend': 'InPost parcel locker — parcel size',
+    'packing.sizeA': 'Small (8×38×64 cm)',
+    'packing.sizeB': 'Medium (19×38×64 cm)',
+    'packing.sizeC': 'Large (41×38×64 cm)',
+    'packing.dims': 'Dimensions (cm)',
+    'packing.weight': 'Weight (kg)',
+    'packing.selectSizeNote': 'Choose a parcel size (A, B or C) to create an InPost parcel locker label.',
+    'packing.savingSize': 'Saving parcel size…',
+    'packing.saveError': 'Could not save the parcel size: {detail}',
+    'packing.labelLocker': 'Parcel locker label',
+    'packing.labelCourier': 'Courier label',
+    'packing.invoice': 'Document',
+    'packing.done': 'DONE',
+    'packing.generatingLabel': 'Generating label…',
+    'packing.doneConfirm': 'The label has not been printed — mark the order as done anyway?',
+    'err.revertOrder': 'Could not revert the order',
+    'err.copyId': 'Could not copy the ID',
+    'err.label': 'Could not download the label',
+    'err.document': 'Could not generate the document',
+    'err.done': 'Could not mark the order as done',
+
+    'done.title': 'Done ({n})',
+    'done.empty': 'No completed orders.',
+    'done.labelCreated': 'Label created',
+    'done.labelMissing': '— no label —',
+    'done.undo': 'Undo',
+
+    'settings.title': 'Settings',
+    'settings.tabDocuments': 'Documents',
+    'settings.tabShipping': 'Shipping',
+    'settings.tabArchive': 'Archive',
+    'settings.docsIntro': 'Select the fields to show on the printout.',
+    'inv.buyerName': 'Buyer name',
+    'inv.buyerAddress': 'Buyer address',
+    'inv.items': 'Product list',
+    'inv.price': 'Unit price',
+    'inv.courier': 'Courier',
+    'inv.pickupPoint': 'Pickup point (parcel locker)',
+    'inv.allegroId': 'Allegro order number',
+    'inv.freeTextLabel': 'Custom text (max 160 characters)',
+    'inv.freeTextPlaceholder': 'e.g. Thank you for your purchase!',
+    'settings.customDocDesc': 'Custom PDF document — printed with the "Custom document" button while packing.',
+    'settings.docUploaded': 'Document uploaded',
+    'settings.docNone': 'No document',
+    'settings.docReplace': 'Replace file',
+    'settings.docChoose': 'Choose a PDF file',
+    'settings.docUploadedOk': 'Uploaded successfully',
+    'settings.saved': 'Saved',
+    'settings.error': 'Error',
+    'err.docDelete': 'Could not delete the document',
+    'settings.shippingIntro': 'Sender, recipient and pickup point details are read automatically from Allegro. Set the sender address in the "Wysyłam z Allegro" address book.',
+    'settings.defaultPackageHtml': '<strong>Default parcel</strong> — starting values in the packing view.',
+    'sh.length': 'Length (cm)',
+    'sh.width': 'Width (cm)',
+    'sh.height': 'Height (cm)',
+    'sh.weight': 'Weight (kg)',
+    'sh.pageSize': 'Label size',
+    'sh.pdfNote': 'Labels are generated as PDF files for printing in the browser.',
+    'settings.archiveCount': {
+      one: '{n} archived order.',
+      other: '{n} archived orders.',
+    },
+    'settings.archiveEmpty': 'The archive is empty.',
+    'settings.archiveNoDate': 'no date',
+
+    'day.confirm': 'End the day and archive every Done order?',
+    'day.noneReady': 'There are no Done orders.',
+    'day.missingLabels': {
+      one: '{n} order has no label yet. End the day anyway?',
+      other: '{n} orders have no label yet. End the day anyway?',
+    },
+    'err.endDay': 'Could not end the day',
+    'err.sync': 'Synchronization failed',
+
+    'setup.title': 'Connect your Allegro',
+    'setup.intro': 'Configure access to Allegro to fetch orders and prepare shipments.',
+    'setup.checking': 'Checking configuration…',
+    'setup.createAppHtml': 'Create an application in the <a href="https://developer.allegro.pl/" target="_blank" rel="noopener noreferrer">Allegro developer panel</a> and copy its details below.',
+    'setup.redirectLabel': 'Allegro application redirect URI:',
+    'setup.envSandbox': 'Environment: Allegro Sandbox. Use the test application credentials.',
+    'setup.envProduction': 'Environment: Allegro. Use the production application credentials.',
+    'setup.saveNote': 'The details are saved on the server. The Client Secret will not be shown again.',
+    'setup.submit': 'Save and continue',
+    'setup.savedTitle': 'Allegro details saved',
+    'setup.saveTokenNote': 'Keep the access token below in a safe place. Weles will ask for it the next time you open the application.',
+    'setup.accessTokenLabel': 'Weles access token',
+    'setup.copyToken': 'Copy token',
+    'setup.continue': 'Go to the application',
+    'setup.retry': 'Check again',
+    'setup.saving': 'Saving…',
+    'setup.savedMsg': 'Allegro details saved. Keep the access token before continuing to the application.',
+    'setup.saveFailed': 'Could not save the configuration.',
+    'setup.statusFailed': 'Could not check the configuration.',
+    'setup.tokenCopied': 'Token copied. Keep it in a safe place.',
+    'setup.tokenCopyManual': 'Copy the selected token and keep it in a safe place.',
+  },
+};
+
+let currentLanguage = DEFAULT_LANGUAGE;
+
+// Text that depends on live state (counts, in-flight operations) rather than a
+// single catalog key. Registering a render function here lets a language switch
+// rewrite the node in place without re-rendering the view.
+const dynamicText = new Map();
+
+function normalizeLanguage(value) {
+  if (!value) return null;
+  const base = String(value).trim().toLowerCase().split(/[-_]/)[0];
+  return SUPPORTED_LANGUAGES.indexOf(base) >= 0 ? base : null;
+}
+
+function readStoredLanguage() {
+  try {
+    if (typeof localStorage === 'undefined' || !localStorage) return null;
+    return normalizeLanguage(localStorage.getItem(LANGUAGE_STORAGE_KEY));
+  } catch {
+    return null;
+  }
+}
+
+function persistLanguage(lang) {
+  try {
+    if (typeof localStorage === 'undefined' || !localStorage) return;
+    localStorage.setItem(LANGUAGE_STORAGE_KEY, lang);
+  } catch {
+    // Storage may be blocked (private mode, disabled cookies). The choice still
+    // applies for this session; it is simply not remembered.
+  }
+}
+
+function languageLocale(lang) {
+  return LOCALES[lang || currentLanguage] || LOCALES[DEFAULT_LANGUAGE];
+}
+
+function pluralCategory(lang, count) {
+  const n = Number(count);
+  if (!Number.isFinite(n)) return 'other';
+  try {
+    if (typeof Intl !== 'undefined' && Intl.PluralRules) return new Intl.PluralRules(lang).select(n);
+  } catch {
+    // Fall through to a minimal English-style rule.
+  }
+  return n === 1 ? 'one' : 'other';
+}
+
+function interpolate(template, vars) {
+  return String(template).replace(/\{(\w+)\}/g, (match, name) =>
+    Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : match);
+}
+
+function t(key, vars = {}, count) {
+  const table = MESSAGES[currentLanguage] || MESSAGES[DEFAULT_LANGUAGE];
+  let entry = table[key];
+  if (entry === undefined) entry = MESSAGES[DEFAULT_LANGUAGE][key];
+  if (entry === undefined) return key;
+  const values = vars || {};
+  if (entry !== null && typeof entry === 'object') {
+    const n = count === undefined ? values.n : count;
+    const category = pluralCategory(currentLanguage, n === undefined ? 0 : n);
+    entry = entry[category] !== undefined ? entry[category]
+      : entry.other !== undefined ? entry.other
+        : entry.many !== undefined ? entry.many
+          : entry.one !== undefined ? entry.one
+            : Object.values(entry)[0];
+  }
+  return interpolate(entry, values);
+}
+
+// App-owned delivery categories are localized; carrier names coming from
+// Allegro pass through unchanged.
+function categoryLabel(category) {
+  if (category === 'Paczkomat InPost') return t('category.locker');
+  if (category === 'Inny') return t('category.other');
+  return category;
+}
+
+function formatDateTime(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString(languageLocale());
+}
+
+function formatNumber(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return String(value);
+  return num.toLocaleString(languageLocale());
+}
+
+function getLanguage() {
+  return currentLanguage;
+}
+
+function translationVars(node) {
+  const raw = node.getAttribute('data-i18n-vars');
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function translationCount(node) {
+  const raw = node.getAttribute('data-i18n-count');
+  if (raw === null || raw === undefined) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function applyTextNode(node) {
+  const key = node.getAttribute('data-i18n');
+  if (!key) return;
+  node.textContent = t(key, translationVars(node), translationCount(node));
+}
+
+// Render helper for nodes whose key/vars are only known at runtime. It writes
+// the attributes so a later language switch can recompute the same text.
+function setText(node, key, vars, count) {
+  if (!node) return;
+  node.setAttribute('data-i18n', key);
+  if (vars && Object.keys(vars).length) node.setAttribute('data-i18n-vars', JSON.stringify(vars));
+  else node.removeAttribute('data-i18n-vars');
+  if (count === undefined || count === null) node.removeAttribute('data-i18n-count');
+  else node.setAttribute('data-i18n-count', String(count));
+  node.textContent = t(key, vars || {}, count === undefined ? undefined : count);
+}
+
+function bindDynamicText(node, render) {
+  if (!node) return;
+  node.textContent = render();
+  dynamicText.set(node, render);
+}
+
+// Like dynamicText, but for text outside the re-rendered content: the state
+// banner, the setup status line and form notes. renderQueue() clears dynamicText
+// on every view rebuild, so chrome that outlives a render keeps its render
+// function here instead. A render function tracks the selected language; raw
+// text (an upstream error) is deliberately never bound so it cannot be
+// machine-translated.
+const staticText = new Map();
+
+function bindStaticText(node, render) {
+  if (!node) return;
+  node.textContent = render();
+  staticText.set(node, render);
+}
+
+function clearStaticText(node) {
+  if (node) staticText.delete(node);
+}
+
+// Status line under a form: a render function keeps catalog text in sync with
+// the language, a raw string is shown verbatim.
+function showNote(node, content) {
+  if (!node) return;
+  if (typeof content === 'function') bindStaticText(node, content);
+  else { clearStaticText(node); node.textContent = content; }
+  node.classList.remove('hidden');
+}
+
+function syncLanguageControls(root) {
+  const scope = root || (typeof document !== 'undefined' ? document : null);
+  if (!scope || !scope.querySelectorAll) return;
+  scope.querySelectorAll('[data-lang-select]').forEach(select => { select.value = currentLanguage; });
+}
+
+function applyDocumentLanguage() {
+  if (typeof document !== 'undefined' && document && document.documentElement) {
+    document.documentElement.lang = currentLanguage;
+  }
+}
+
+// Rewrite already-rendered nodes in place. Nothing is re-fetched or rebuilt, so
+// selections, unsaved form values, the packing carousel and in-flight
+// operations all survive a language switch.
+function applyLanguage(root) {
+  const scope = root || (typeof document !== 'undefined' ? document : null);
+  if (scope && scope.querySelectorAll) {
+    scope.querySelectorAll('[data-i18n]').forEach(applyTextNode);
+    scope.querySelectorAll('[data-i18n-html]').forEach(node => {
+      node.innerHTML = t(node.getAttribute('data-i18n-html'));
+    });
+    scope.querySelectorAll('[data-i18n-title]').forEach(node => {
+      node.title = t(node.getAttribute('data-i18n-title'));
+    });
+    scope.querySelectorAll('[data-i18n-placeholder]').forEach(node => {
+      node.placeholder = t(node.getAttribute('data-i18n-placeholder'));
+    });
+    scope.querySelectorAll('[data-i18n-aria]').forEach(node => {
+      node.setAttribute('aria-label', t(node.getAttribute('data-i18n-aria')));
+    });
+    syncLanguageControls(scope);
+  }
+  dynamicText.forEach((render, node) => { node.textContent = render(); });
+  staticText.forEach((render, node) => {
+    // Drop bindings for nodes a re-render replaced; writing to a detached node
+    // would also leak the old element.
+    if (node.isConnected === false) { staticText.delete(node); return; }
+    node.textContent = render();
+  });
+}
+
+function setLanguage(lang, options = {}) {
+  const normalized = normalizeLanguage(lang);
+  if (!normalized) return false;
+  currentLanguage = normalized;
+  persistLanguage(normalized);
+  applyDocumentLanguage();
+  applyLanguage(options.root);
+  return true;
+}
+
+// Remembered preference from a previous visit, otherwise Polish — deliberately
+// not derived from navigator.language.
+currentLanguage = readStoredLanguage() || DEFAULT_LANGUAGE;
+
 async function promptForAccessToken() {
   if (accessToken) return accessToken;
   if (!accessTokenPrompt) {
     accessTokenPrompt = Promise.resolve().then(() => {
-      const entered = window.prompt('Podaj PACKING_ACCESS_TOKEN z pliku .env:');
-      if (!entered || !entered.trim()) throw new Error('Token dostępu jest wymagany.');
+      const entered = window.prompt(t('token.prompt'));
+      if (!entered || !entered.trim()) throw new Error(t('token.required'));
       accessToken = entered.trim();
       return accessToken;
     }).finally(() => { accessTokenPrompt = null; });
@@ -19,6 +584,9 @@ async function promptForAccessToken() {
 async function apiFetch(path, options = {}) {
   const send = token => {
     const headers = new Headers(options.headers || {});
+    // Every application request (JSON, PDF, setup, OAuth initiation) tells the
+    // backend which language to answer in.
+    headers.set('Accept-Language', currentLanguage);
     if (token) headers.set('Authorization', `Bearer ${token}`);
     return fetch(`${API}${path}`, { ...options, headers });
   };
@@ -65,7 +633,7 @@ function reportError(prefix, err) {
 async function openPdf(path) {
   // Reserve the tab during the click; browsers block popups after a slow API call.
   const printTab = window.open('about:blank', '_blank');
-  if (!printTab) throw new Error('Przeglądarka blokuje okno wydruku. Zezwól na wyskakujące okna i spróbuj ponownie.');
+  if (!printTab) throw new Error(t('print.popupBlocked'));
   printTab.opener = null;
   try {
     const res = await apiFetch(path);
@@ -102,6 +670,7 @@ let state = {
   parcelSizeSaves: new Map(),
   parcelSizeErrors: new Map(),
   dryRun: false,        // PACKING_SHIPMENT_DRY_RUN — enables test-only actions
+  authorized: false,    // Allegro session state, shown on the auth button
 };
 
 // ---- Fetch ----
@@ -109,19 +678,25 @@ let state = {
 function renderStateBanner(status) {
   const el = document.getElementById('state-banner');
   if (!el) return;
-  let message = '';
+  let render = null;
   if (status && status.ok === false) {
-    message = status.message || 'Problem ze stanem aplikacji.';
+    // The backend sends an app-owned, already-worded message. Keep it as
+    // diagnostic detail beside a generic prefix that follows the language,
+    // rather than guessing a translation for arbitrary text.
+    const detail = status.message ? String(status.message) : '';
+    render = () => '⚠ ' + t('banner.problem') + (detail ? ' ' + detail : '');
   } else if (status && status.quarantined) {
-    message = `${status.quarantined} rekord(ów) pominięto — dane nie przechodzą walidacji.`;
+    const n = status.quarantined;
+    render = () => '⚠ ' + t('banner.quarantined', { n });
   }
-  if (!message) {
+  if (!render) {
+    clearStaticText(el);
     el.classList.add('hidden');
     el.textContent = '';
     return;
   }
-  el.textContent = '⚠ ' + message;
   el.classList.remove('hidden');
+  bindStaticText(el, render);
 }
 
 async function fetchAll() {
@@ -156,7 +731,7 @@ function updateBadges() {
   const counts = { pending: 0, picking: 0, packing: 0, done: 0 };
   state.orders.forEach(o => counts[o.status]++);
   Object.entries(counts).forEach(([k, v]) => {
-    document.getElementById(`count-${k}`).textContent = v;
+    document.getElementById(`count-${k}`).textContent = formatNumber(v);
   });
 
   // Inject courier sub-items under Oczekujące
@@ -178,7 +753,19 @@ function updateBadges() {
   couriers.forEach(courier => {
     const li = document.createElement('li');
     li.className = 'courier-nav-item' + (state.currentCourier === courier ? ' active' : '');
-    li.innerHTML = `${esc(courier)} <span class="badge badge-dim">${courierCounts[courier]}</span>`;
+    // The translation key goes on the inner label, never on the li: translating
+    // the li would assign textContent and drop the badge child.
+    const label = document.createElement('span');
+    label.className = 'courier-nav-label';
+    const key = courier === 'Paczkomat InPost' ? 'category.locker'
+      : courier === 'Inny' ? 'category.other' : null;
+    if (key) setText(label, key);
+    else label.textContent = courier;
+    const badge = document.createElement('span');
+    badge.className = 'badge badge-dim';
+    badge.textContent = courierCounts[courier];
+    li.appendChild(label);
+    li.appendChild(badge);
     li.addEventListener('click', (e) => {
       e.stopPropagation();
       state.currentCourier = state.currentCourier === courier ? null : courier;
@@ -197,6 +784,7 @@ function updateBadges() {
 function renderQueue(queue) {
   state.currentQueue = queue;
   if (queue !== 'pending') state.currentCourier = null;
+  dynamicText.clear();
   document.querySelectorAll('.queue-item').forEach(el => {
     el.classList.toggle('active', el.dataset.queue === queue);
   });
@@ -213,6 +801,11 @@ function renderQueue(queue) {
 
 // ---- Pending view ----
 
+function selectedCountText(products, orders) {
+  if (!products) return t('pending.selectHint');
+  return `${products} ${t('unit.product', {}, products)} — ${orders} ${t('unit.order', {}, orders)}`;
+}
+
 function renderPending(el) {
   const orders = state.orders.filter(o =>
     o.status === 'pending' &&
@@ -221,25 +814,26 @@ function renderPending(el) {
   state.selectedOrderIds.clear();
 
   el.innerHTML = `
-    <h2>Oczekujące zamówienia</h2>
+    <h2 data-i18n="pending.title">${t('pending.title')}</h2>
     <div id="pending-toolbar">
-      <button class="btn btn-primary" id="btn-create-pl" disabled>
-        Utwórz listę kompletowania
+      <button class="btn btn-primary" id="btn-create-pl" disabled data-i18n="pending.createList">
+        ${t('pending.createList')}
       </button>
-      <span id="selected-count" style="font-size:13px;color:#888">Zaznacz produkty</span>
+      <span id="selected-count" style="font-size:13px;color:#888">${t('pending.selectHint')}</span>
     </div>
     <div class="order-list" id="order-list"></div>
   `;
 
   const list = el.querySelector('#order-list');
+  const countEl = el.querySelector('#selected-count');
 
   if (!orders.length) {
     // Seeding sample orders is a dry-run affordance. On a real instance the
     // backend rejects it, so the button must not be offered at all.
     const seedAction = state.dryRun
-      ? ' lub <button class="btn btn-secondary" id="btn-seed-sample" style="display:inline-block;margin-left:8px;padding:4px 8px;font-size:12px">Wczytaj zamówienia testowe</button>'
+      ? ` ${t('pending.emptyOr')} <button class="btn btn-secondary" id="btn-seed-sample" data-i18n="pending.seedSample" style="display:inline-block;margin-left:8px;padding:4px 8px;font-size:12px">${t('pending.seedSample')}</button>`
       : '';
-    list.innerHTML = `<p class="empty">Brak oczekujących zamówień. Kliknij "Pobierz zamówienia"${seedAction}.</p>`;
+    list.innerHTML = `<p class="empty"><span data-i18n="pending.emptyLead">${t('pending.emptyLead')}</span>${seedAction}.</p>`;
     const seedBtn = list.querySelector('#btn-seed-sample');
     if (seedBtn) {
       seedBtn.addEventListener('click', async () => {
@@ -249,7 +843,7 @@ function renderPending(el) {
           await fetchAll();
           renderQueue('pending');
         } catch (err) {
-          reportError('Nie udało się wczytać zamówień testowych', err);
+          reportError(t('err.seedSample'), err);
         }
       });
     }
@@ -273,7 +867,9 @@ function renderPending(el) {
     if (!state.currentCourier) {
       const header = document.createElement('div');
       header.className = 'courier-header';
-      header.textContent = courier;
+      header.textContent = categoryLabel(courier);
+      if (courier === 'Paczkomat InPost') header.setAttribute('data-i18n', 'category.locker');
+      else if (courier === 'Inny') header.setAttribute('data-i18n', 'category.other');
       list.appendChild(header);
     }
 
@@ -301,7 +897,7 @@ function renderPending(el) {
         <input type="checkbox" />
         <div class="order-info">
           <div class="buyer">${data.qty}x ${esc(name)}</div>
-          <div class="address" style="margin-top:4px">${txCount} ${txCount === 1 ? 'transakcja' : txCount < 5 ? 'transakcje' : 'transakcji'}</div>
+          <div class="address" style="margin-top:4px"><span data-i18n="pending.transactionCount" data-i18n-count="${txCount}" data-i18n-vars='{"n":${txCount}}'>${t('pending.transactionCount', { n: txCount }, txCount)}</span></div>
         </div>
       `;
       const cb = card.querySelector('input');
@@ -321,12 +917,13 @@ function renderPending(el) {
 
         const n = selectedProducts.size;
         document.getElementById('btn-create-pl').disabled = n === 0;
-        document.getElementById('selected-count').textContent =
-          n ? `${n} ${n === 1 ? 'produkt' : 'produkty'} — ${state.selectedOrderIds.size} zamówień` : 'Zaznacz produkty';
+        countEl.textContent = selectedCountText(n, state.selectedOrderIds.size);
       });
       list.appendChild(card);
     });
   });
+
+  bindDynamicText(countEl, () => selectedCountText(selectedProducts.size, state.selectedOrderIds.size));
 
   el.querySelector('#btn-create-pl').addEventListener('click', async () => {
     if (!state.selectedOrderIds.size) return;
@@ -337,7 +934,7 @@ function renderPending(el) {
         body: JSON.stringify({ name: '', order_ids: [...state.selectedOrderIds] }),
       });
     } catch (err) {
-      reportError('Nie udało się utworzyć listy', err);
+      reportError(t('err.createList'), err);
       return;
     }
     await fetchAll();
@@ -348,13 +945,11 @@ function renderPending(el) {
 // ---- Picking view ----
 
 function renderPicking(el) {
-  const pickingOrders = state.orders.filter(o => o.status === 'picking');
-
-  el.innerHTML = `<h2>Kompletowanie</h2><div class="order-list" id="pl-list"></div>`;
+  el.innerHTML = `<h2 data-i18n="picking.title">${t('picking.title')}</h2><div class="order-list" id="pl-list"></div>`;
   const list = el.querySelector('#pl-list');
 
   if (!state.pickingLists.length) {
-    list.innerHTML = '<p class="empty">Brak aktywnych list kompletowania.</p>';
+    list.innerHTML = `<p class="empty" data-i18n="picking.empty">${t('picking.empty')}</p>`;
     return;
   }
 
@@ -366,19 +961,19 @@ function renderPicking(el) {
       <div class="pl-info">
         <div class="pl-name-wrap">
           <span class="pl-name" data-id="${pl.id}">${esc(pl.name)}</span>
-          <span class="pl-count">${orderCount} zamówień</span>
+          <span class="pl-count" data-i18n="picking.orderCount" data-i18n-count="${orderCount}" data-i18n-vars='{"n":${orderCount}}'>${t('picking.orderCount', { n: orderCount }, orderCount)}</span>
         </div>
         <div class="pl-rename hidden" data-id="${pl.id}">
           <input class="pl-rename-input" type="text" value="${esc(pl.name)}" />
-          <button class="btn btn-primary btn-rename-confirm" data-id="${pl.id}">Zapisz</button>
-          <button class="btn btn-secondary btn-rename-cancel">Anuluj</button>
+          <button class="btn btn-primary btn-rename-confirm" data-id="${pl.id}" data-i18n="common.save">${t('common.save')}</button>
+          <button class="btn btn-secondary btn-rename-cancel" data-i18n="common.cancel">${t('common.cancel')}</button>
         </div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <button class="btn-icon-red btn-revert" data-id="${pl.id}" title="Cofnij do oczekujących">↩</button>
-        <button class="btn btn-secondary btn-rename-toggle" data-id="${pl.id}">✏ Zmień nazwę</button>
-        <button class="btn btn-secondary btn-print-pl" data-id="${pl.id}">🖨 Drukuj listę</button>
-        <button class="btn btn-primary btn-start-pack" data-id="${pl.id}">Pakuj →</button>
+        <button class="btn-icon-red btn-revert" data-id="${pl.id}" data-i18n-title="common.revertTitle" title="${esc(t('common.revertTitle'))}">↩</button>
+        <button class="btn btn-secondary btn-rename-toggle" data-id="${pl.id}">✏ <span data-i18n="picking.rename">${t('picking.rename')}</span></button>
+        <button class="btn btn-secondary btn-print-pl" data-id="${pl.id}">🖨 <span data-i18n="picking.print">${t('picking.print')}</span></button>
+        <button class="btn btn-primary btn-start-pack" data-id="${pl.id}" data-i18n="picking.start">${t('picking.start')}</button>
       </div>
     `;
     list.appendChild(card);
@@ -389,7 +984,7 @@ function renderPicking(el) {
       try {
         await api(`/picking-lists/${btn.dataset.id}/revert`, { method: 'POST' });
       } catch (err) {
-        reportError('Nie udało się cofnąć listy', err);
+        reportError(t('err.revertList'), err);
         return;
       }
       await fetchAll();
@@ -432,7 +1027,7 @@ function renderPicking(el) {
           body: JSON.stringify({ name: newName }),
         });
       } catch (err) {
-        reportError('Nie udało się zmienić nazwy', err);
+        reportError(t('err.rename'), err);
         return;
       }
       await fetchAll();
@@ -445,7 +1040,7 @@ function renderPicking(el) {
       try {
         await api(`/picking-lists/${btn.dataset.id}/start-packing`, { method: 'POST' });
       } catch (err) {
-        reportError('Nie udało się przenieść do pakowania', err);
+        reportError(t('err.startPacking'), err);
         return;
       }
       await fetchAll();
@@ -477,11 +1072,11 @@ function printPickingList(plId) {
   ).join('');
 
   const win = window.open('', '_blank');
-  win.document.write(`<!DOCTYPE html><html><head><title>${esc(pl.name)}</title>
+  win.document.write(`<!DOCTYPE html><html lang="${currentLanguage}"><head><title>${esc(pl.name)}</title>
     <style>body{font-family:Arial;margin:40px}table{width:100%;border-collapse:collapse}
     td,th{border:1px solid #ccc;padding:8px}th{background:#eee}</style></head>
-    <body><h2>Lista: ${esc(pl.name)}</h2>
-    <table><thead><tr><th>Produkt</th><th>Ilość</th></tr></thead>
+    <body><h2>${esc(t('picking.printTitle', { name: pl.name }))}</h2>
+    <table><thead><tr><th>${esc(t('picking.printProduct'))}</th><th>${esc(t('picking.printQty'))}</th></tr></thead>
     <tbody>${rows}</tbody></table>
     <script>window.onload=()=>window.print()<\/script></body></html>`);
   win.document.close();
@@ -495,14 +1090,29 @@ function renderPacking(el) {
   renderPackingCard(el);
 }
 
+function parcelSizeStatusText(order) {
+  const pendingSize = state.parcelSizeSaves.get(order.id);
+  if (pendingSize) return t('packing.savingSize');
+  const error = state.parcelSizeErrors.get(order.id);
+  if (error) return t(error.key, error.vars);
+  return '';
+}
+
+function labelButtonText(isLocker, printed, busy) {
+  if (busy) return t('packing.generatingLabel');
+  const base = isLocker ? t('packing.labelLocker') : t('packing.labelCourier');
+  return printed ? `✓ ${base}` : `🖨 ${base}`;
+}
+
 function renderPackingCard(el) {
   const orders = state.packingQueue;
 
-  el.innerHTML = `<h2>Pakowanie</h2><div id="packing-view"></div>`;
+  el.innerHTML = `<h2 data-i18n="packing.title">${t('packing.title')}</h2><div id="packing-view"></div>`;
   const view = el.querySelector('#packing-view');
+  dynamicText.clear();
 
   if (!orders.length) {
-    view.innerHTML = '<p class="empty">Brak zamówień do pakowania. Przesuń listę kompletowania do pakowania.</p>';
+    view.innerHTML = `<p class="empty" data-i18n="packing.empty">${t('packing.empty')}</p>`;
     return;
   }
 
@@ -521,45 +1131,45 @@ function renderPackingCard(el) {
 
   view.innerHTML = `
     <div class="pack-nav">
-      <button class="btn btn-secondary" id="btn-prev" ${idx === 0 ? 'disabled' : ''}>← Poprzednie</button>
+      <button class="btn btn-secondary" id="btn-prev" ${idx === 0 ? 'disabled' : ''}>← <span data-i18n="packing.prev">${t('packing.prev')}</span></button>
       <span>${idx + 1} / ${orders.length}</span>
-      <button class="btn btn-secondary" id="btn-next" ${idx === orders.length - 1 ? 'disabled' : ''}>Następne →</button>
+      <button class="btn btn-secondary" id="btn-next" ${idx === orders.length - 1 ? 'disabled' : ''}><span data-i18n="packing.next">${t('packing.next')}</span> →</button>
     </div>
     <div class="pack-card ${animClass}">
-      <button class="btn-icon-red btn-revert-pending" id="btn-revert-pending" title="Cofnij do oczekujących">↩</button>
+      <button class="btn-icon-red btn-revert-pending" id="btn-revert-pending" data-i18n-title="common.revertTitle" title="${esc(t('common.revertTitle'))}">↩</button>
       <div class="buyer">${esc(order.buyer_name)}</div>
       <div class="address">${esc(order.buyer_address)}</div>
       <div class="allegro-id">
         <span class="allegro-id-label">ID:</span>
         <span class="allegro-id-value">${esc(order.allegro_id)}</span>
-        <button class="btn-copy" data-copy="${esc(order.allegro_id)}" title="Kopiuj ID">⧉</button>
+        <button class="btn-copy" data-copy="${esc(order.allegro_id)}" data-i18n-title="common.copyId" title="${esc(t('common.copyId'))}">⧉</button>
       </div>
       <div class="items">${order.items.map(i => `${i.quantity}x ${esc(i.name)}`).join('<br/>')}</div>
-      ${order.tracking_number ? `<div class="tracking-info" style="color:#65dfb5;margin:8px 0;font-size:13px">📦 Nr przesyłki: <strong>${esc(order.tracking_number)}</strong></div>` : ''}
+      ${order.tracking_number ? `<div class="tracking-info" style="color:#65dfb5;margin:8px 0;font-size:13px">📦 <span data-i18n="packing.trackingLabel">${t('packing.trackingLabel')}</span> <strong>${esc(order.tracking_number)}</strong></div>` : ''}
       ${isLocker ? `
       <fieldset class="parcel-sizes" ${pendingSize || order.shipment_id || order.tracking_number ? 'disabled' : ''}>
-        <legend>Paczkomat InPost — gabaryt paczki</legend>
+        <legend data-i18n="packing.lockerLegend">${t('packing.lockerLegend')}</legend>
         <div class="parcel-size-options">
-          ${[['A', 'Mała (8×38×64 cm)'], ['B', 'Średnia (19×38×64 cm)'], ['C', 'Duża (41×38×64 cm)']].map(([size, title]) => `
+          ${[['A', 'packing.sizeA'], ['B', 'packing.sizeB'], ['C', 'packing.sizeC']].map(([size, key]) => `
             <label class="parcel-size-option">
               <input type="radio" name="parcel-size" value="${size}" ${selectedSize === size ? 'checked' : ''}>
-              <span><strong>${size}</strong>${title}</span>
+              <span><strong>${size}</strong><span data-i18n="${key}">${t(key)}</span></span>
             </label>`).join('')}
         </div>
       </fieldset>` : `<div class="pack-dims">
-        <label>Wymiary (cm)</label>
+        <label data-i18n="packing.dims">${t('packing.dims')}</label>
         <input type="number" class="dim-input" id="dim-l" value="${esc(pkg.length ?? 30)}" min="1"> ×
         <input type="number" class="dim-input" id="dim-w" value="${esc(pkg.width ?? 20)}" min="1"> ×
         <input type="number" class="dim-input" id="dim-h" value="${esc(pkg.height ?? 15)}" min="1">
-        <label style="margin-left:12px">Waga (kg)</label>
+        <label style="margin-left:12px" data-i18n="packing.weight">${t('packing.weight')}</label>
         <input type="number" class="dim-input" id="dim-wt" value="${esc(pkg.weight ?? 1.0)}" min="0.1" step="0.1">
       </div>`}
-      ${lockerNeedsSize ? '<p class="parcel-size-note">Wybierz gabaryt paczki (A, B lub C), aby utworzyć etykietę Paczkomat InPost.</p>' : ''}
-      <p id="parcel-size-status" class="parcel-size-note" role="status" aria-live="polite">${pendingSize ? 'Zapisywanie gabarytu…' : esc(state.parcelSizeErrors.get(order.id) || '')}</p>
+      ${lockerNeedsSize ? `<p class="parcel-size-note" data-i18n="packing.selectSizeNote">${t('packing.selectSizeNote')}</p>` : ''}
+      <p id="parcel-size-status" class="parcel-size-note" role="status" aria-live="polite">${esc(parcelSizeStatusText(order))}</p>
       <div class="pack-buttons">
-        <button class="btn btn-label" id="btn-label" ${lockerNeedsSize || pendingSize ? 'disabled' : ''}>${isLocker ? '🖨 Etykieta Paczkomat' : '🖨 Etykieta kurierska'}</button>
-        <button class="btn btn-invoice" id="btn-invoice">🖨 Dokument</button>
-        <button class="btn btn-done" id="btn-done">✓ GOTOWE</button>
+        <button class="btn btn-label" id="btn-label" ${lockerNeedsSize || pendingSize ? 'disabled' : ''}>${esc(labelButtonText(isLocker, Boolean(order.shipment_id), false))}</button>
+        <button class="btn btn-invoice" id="btn-invoice">🖨 <span data-i18n="packing.invoice">${t('packing.invoice')}</span></button>
+        <button class="btn btn-done" id="btn-done">✓ <span data-i18n="packing.done">${t('packing.done')}</span></button>
       </div>
     </div>
   `;
@@ -568,7 +1178,7 @@ function renderPackingCard(el) {
     try {
       await api(`/orders/${order.id}/revert-pending`, { method: 'POST' });
     } catch (err) {
-      reportError('Nie udało się cofnąć zamówienia', err);
+      reportError(t('err.revertOrder'), err);
       return;
     }
     await fetchAll();
@@ -585,13 +1195,19 @@ function renderPackingCard(el) {
         copyBtn.textContent = '✓';
         setTimeout(() => { copyBtn.textContent = '⧉'; }, 1200);
       } catch (err) {
-        reportError('Nie udało się skopiować ID', err);
+        reportError(t('err.copyId'), err);
       }
     });
   }
 
   // The label may already exist from an earlier session — do not warn in that case.
   let labelReady = Boolean(order.shipment_id);
+  let labelBusy = false;
+  const statusEl = view.querySelector('#parcel-size-status');
+  if (statusEl) bindDynamicText(statusEl, () => parcelSizeStatusText(order));
+  const labelBtn = view.querySelector('#btn-label');
+  if (labelBtn) bindDynamicText(labelBtn, () => labelButtonText(isLocker, labelReady, labelBusy));
+
   view.querySelectorAll('input[name="parcel-size"]').forEach(input => {
     input.addEventListener('change', async () => {
       if (state.parcelSizeSaves.has(order.id)) return;
@@ -600,7 +1216,7 @@ function renderPackingCard(el) {
       state.parcelSizeSaves.set(order.id, { value: input.value });
       state.parcelSizeErrors.delete(order.id);
       fieldset.disabled = true;
-      note.textContent = 'Zapisywanie gabarytu…';
+      note.textContent = t('packing.savingSize');
       try {
         const result = await api(`/orders/${order.id}/parcel-size`, {
           method: 'PATCH', headers: { 'Content-Type': 'application/json' },
@@ -610,7 +1226,7 @@ function renderPackingCard(el) {
           if (saved.id === order.id) saved.parcel_size = result.parcel_size;
         }
       } catch (err) {
-        state.parcelSizeErrors.set(order.id, `Nie udało się zapisać gabarytu: ${err.message}`);
+        state.parcelSizeErrors.set(order.id, { key: 'packing.saveError', vars: { detail: err.message } });
       } finally {
         state.parcelSizeSaves.delete(order.id);
         if (state.currentQueue === 'packing' && state.packingQueue[state.packingIndex]?.id === order.id) {
@@ -639,14 +1255,15 @@ function renderPackingCard(el) {
         height: view.querySelector('#dim-h').value, weight: view.querySelector('#dim-wt').value,
       });
     btn.disabled = true;
-    const previousLabel = btn.textContent;
-    btn.textContent = 'Generowanie etykiety…';
+    labelBusy = true;
+    btn.textContent = t('packing.generatingLabel');
     try {
       await openPdf(`/print/orders/${order.id}/label?${params}`);
       // Only claim the label is printed once the PDF actually came back.
       labelReady = true;
+      labelBusy = false;
       btn.classList.add('printed');
-      btn.textContent = isLocker ? '✓ Etykieta Paczkomat' : '✓ Etykieta kurierska';
+      btn.textContent = labelButtonText(isLocker, true, false);
       try {
         const info = await api(`/print/orders/${order.id}/shipment`);
         if (info && info.shipment_id) {
@@ -660,8 +1277,9 @@ function renderPackingCard(el) {
         }
       } catch { /* best effort */ }
     } catch (err) {
-      btn.textContent = previousLabel;
-      reportError('Nie udało się pobrać etykiety', err);
+      labelBusy = false;
+      btn.textContent = labelButtonText(isLocker, labelReady, false);
+      reportError(t('err.label'), err);
     } finally {
       btn.disabled = false;
     }
@@ -670,12 +1288,12 @@ function renderPackingCard(el) {
     try {
       await openPdf(`/print/orders/${order.id}/combined`);
     } catch (err) {
-      reportError('Nie udało się wygenerować dokumentu', err);
+      reportError(t('err.document'), err);
     }
   });
   view.querySelector('#btn-done').addEventListener('click', async () => {
     if (!labelReady) {
-      const ok = confirm('Etykieta nie wydrukowana — czy na pewno chcesz oznaczyć jako gotowe?');
+      const ok = confirm(t('packing.doneConfirm'));
       if (!ok) return;
     }
     const card = view.querySelector('.pack-card');
@@ -684,7 +1302,7 @@ function renderPackingCard(el) {
     try {
       await api(`/orders/${order.id}/done`, { method: 'POST' });
     } catch (err) {
-      reportError('Nie udało się oznaczyć jako gotowe', err);
+      reportError(t('err.done'), err);
       renderPackingCard(document.getElementById('content'));
       return;
     }
@@ -700,11 +1318,11 @@ function renderPackingCard(el) {
 
 function renderDone(el) {
   const orders = state.orders.filter(o => o.status === 'done');
-  el.innerHTML = `<h2>Gotowe (${orders.length})</h2><div class="order-list" id="done-list"></div>`;
+  el.innerHTML = `<h2 data-i18n="done.title" data-i18n-vars='{"n":${orders.length}}'>${t('done.title', { n: orders.length })}</h2><div class="order-list" id="done-list"></div>`;
   const list = el.querySelector('#done-list');
 
   if (!orders.length) {
-    list.innerHTML = '<p class="empty">Brak ukończonych zamówień.</p>';
+    list.innerHTML = `<p class="empty" data-i18n="done.empty">${t('done.empty')}</p>`;
     return;
   }
 
@@ -714,8 +1332,8 @@ function renderDone(el) {
     const labelHtml = order.tracking_number
       ? `<div class="tracking-number">📦 ${esc(order.tracking_number)}</div>`
       : order.shipment_id
-        ? `<div class="tracking-number">🏷 Etykieta utworzona</div>`
-        : `<div class="tracking-number missing">— brak etykiety —</div>`;
+        ? `<div class="tracking-number">🏷 <span data-i18n="done.labelCreated">${t('done.labelCreated')}</span></div>`
+        : `<div class="tracking-number missing" data-i18n="done.labelMissing">${t('done.labelMissing')}</div>`;
     card.innerHTML = `
       <div class="order-info">
         <div class="buyer">${esc(order.buyer_name)}</div>
@@ -723,11 +1341,11 @@ function renderDone(el) {
         <div class="allegro-id">
           <span class="allegro-id-label">ID:</span>
           <span class="allegro-id-value">${esc(order.allegro_id)}</span>
-          <button class="btn-copy" data-copy="${esc(order.allegro_id)}" title="Kopiuj ID">⧉</button>
+          <button class="btn-copy" data-copy="${esc(order.allegro_id)}" data-i18n-title="common.copyId" title="${esc(t('common.copyId'))}">⧉</button>
         </div>
         ${labelHtml}
       </div>
-      <button class="btn btn-secondary btn-undo" data-id="${order.id}">↩ Cofnij</button>
+      <button class="btn btn-secondary btn-undo" data-id="${order.id}">↩ <span data-i18n="done.undo">${t('done.undo')}</span></button>
     `;
     list.appendChild(card);
   });
@@ -739,7 +1357,7 @@ function renderDone(el) {
         btn.textContent = '✓';
         setTimeout(() => { btn.textContent = '⧉'; }, 1200);
       } catch (err) {
-        reportError('Nie udało się skopiować ID', err);
+        reportError(t('err.copyId'), err);
       }
     });
   });
@@ -749,7 +1367,7 @@ function renderDone(el) {
       try {
         await api(`/orders/${btn.dataset.id}/undo-done`, { method: 'POST' });
       } catch (err) {
-        reportError('Nie udało się cofnąć zamówienia', err);
+        reportError(t('err.revertOrder'), err);
         return;
       }
       await fetchAll();
@@ -763,11 +1381,11 @@ function renderSettings(el) {
   const activeTab = state.settingsTab;
 
   el.innerHTML = `
-    <h2>Ustawienia</h2>
+    <h2 data-i18n="settings.title">${t('settings.title')}</h2>
     <div class="settings-tabs">
-      <button class="settings-tab ${activeTab === 'documents' ? 'active' : ''}" data-tab="documents">Dokumenty</button>
-      <button class="settings-tab ${activeTab === 'shipping'  ? 'active' : ''}" data-tab="shipping">Wysyłka</button>
-      <button class="settings-tab ${activeTab === 'archive'   ? 'active' : ''}" data-tab="archive">Archiwum</button>
+      <button class="settings-tab ${activeTab === 'documents' ? 'active' : ''}" data-tab="documents" data-i18n="settings.tabDocuments">${t('settings.tabDocuments')}</button>
+      <button class="settings-tab ${activeTab === 'shipping'  ? 'active' : ''}" data-tab="shipping" data-i18n="settings.tabShipping">${t('settings.tabShipping')}</button>
+      <button class="settings-tab ${activeTab === 'archive'   ? 'active' : ''}" data-tab="archive" data-i18n="settings.tabArchive">${t('settings.tabArchive')}</button>
     </div>
     <div id="settings-panel"></div>
   `;
@@ -792,26 +1410,25 @@ async function renderSettingsShipping(panel) {
 
   panel.innerHTML = `
     <div class="settings-section">
-      <p class="settings-desc">Dane nadawcy, odbiorcy i punktu odbioru pobieramy automatycznie z Allegro.
-      Adres nadawcy ustaw w książce adresowej Wysyłam z Allegro.</p>
+      <p class="settings-desc" data-i18n="settings.shippingIntro">${t('settings.shippingIntro')}</p>
     </div>
     <div class="settings-section">
-      <p class="settings-desc"><strong>Domyślna paczka</strong> — wartości startowe w widoku pakowania.</p>
-      <div class="settings-field"><label>Długość (cm)</label><input type="number" id="sh-pkg-length" min="1" value="${esc(pkg.length ?? 30)}"></div>
-      <div class="settings-field"><label>Szerokość (cm)</label><input type="number" id="sh-pkg-width" min="1" value="${esc(pkg.width ?? 20)}"></div>
-      <div class="settings-field"><label>Wysokość (cm)</label><input type="number" id="sh-pkg-height" min="1" value="${esc(pkg.height ?? 15)}"></div>
-      <div class="settings-field"><label>Waga (kg)</label><input type="number" id="sh-pkg-weight" min="0.1" step="0.1" value="${esc(pkg.weight ?? 1.0)}"></div>
-      <div class="settings-field"><label>Rozmiar etykiety</label>
+      <p class="settings-desc" data-i18n-html="settings.defaultPackageHtml">${t('settings.defaultPackageHtml')}</p>
+      <div class="settings-field"><label data-i18n="sh.length">${t('sh.length')}</label><input type="number" id="sh-pkg-length" min="1" value="${esc(pkg.length ?? 30)}"></div>
+      <div class="settings-field"><label data-i18n="sh.width">${t('sh.width')}</label><input type="number" id="sh-pkg-width" min="1" value="${esc(pkg.width ?? 20)}"></div>
+      <div class="settings-field"><label data-i18n="sh.height">${t('sh.height')}</label><input type="number" id="sh-pkg-height" min="1" value="${esc(pkg.height ?? 15)}"></div>
+      <div class="settings-field"><label data-i18n="sh.weight">${t('sh.weight')}</label><input type="number" id="sh-pkg-weight" min="0.1" step="0.1" value="${esc(pkg.weight ?? 1.0)}"></div>
+      <div class="settings-field"><label data-i18n="sh.pageSize">${t('sh.pageSize')}</label>
         <select id="sh-pkg-page">
           <option value="A6" ${pkg.page_size === 'A6' ? 'selected' : ''}>A6</option>
           <option value="A4" ${pkg.page_size === 'A4' ? 'selected' : ''}>A4</option>
         </select>
       </div>
-      <p class="settings-desc">Etykiety są generowane w formacie PDF do wydruku w przeglądarce.</p>
+      <p class="settings-desc" data-i18n="sh.pdfNote">${t('sh.pdfNote')}</p>
     </div>
     <p id="shipping-note" class="settings-note hidden"></p>
     <div class="settings-actions">
-      <button class="btn btn-primary" id="shipping-save">Zapisz</button>
+      <button class="btn btn-primary" id="shipping-save" data-i18n="common.save">${t('common.save')}</button>
     </div>
   `;
 
@@ -840,13 +1457,11 @@ async function renderSettingsShipping(panel) {
         body: JSON.stringify(body),
       });
     } catch (err) {
-      note.textContent = '✗ ' + err.message;
-      note.classList.remove('hidden');
+      showNote(note, '✗ ' + err.message);
       return;
     }
     state.shipmentSettings = { sender: body.sender, package: body.package };
-    note.textContent = '✓ Zapisano';
-    note.classList.remove('hidden');
+    showNote(note, () => '✓ ' + t('settings.saved'));
     setTimeout(() => note.classList.add('hidden'), 3000);
   });
 }
@@ -859,43 +1474,45 @@ async function renderSettingsDocuments(panel) {
 
   panel.innerHTML = `
     <div class="settings-section">
-      <p class="settings-desc">Zaznacz pola które mają pojawiać się na wydruku.</p>
+      <p class="settings-desc" data-i18n="settings.docsIntro">${t('settings.docsIntro')}</p>
       <div class="settings-checks">
-        <label><input type="checkbox" id="inv-buyer-name"    ${(data.show_buyer_name    ?? true) ? 'checked' : ''}> Nazwa kupującego</label>
-        <label><input type="checkbox" id="inv-buyer-address" ${(data.show_buyer_address ?? true) ? 'checked' : ''}> Adres kupującego</label>
-        <label><input type="checkbox" id="inv-items"         ${(data.show_items         ?? true) ? 'checked' : ''}> Lista produktów</label>
-        <label><input type="checkbox" id="inv-price"         ${(data.show_price         ?? true) ? 'checked' : ''}> Cena za sztukę</label>
-        <label><input type="checkbox" id="inv-courier"       ${(data.show_courier       ?? true) ? 'checked' : ''}> Kurier</label>
-        <label><input type="checkbox" id="inv-pickup-point"  ${(data.show_pickup_point  ?? true) ? 'checked' : ''}> Punkt odbioru (paczkomat)</label>
-        <label><input type="checkbox" id="inv-allegro-id"    ${(data.show_allegro_id    ?? true) ? 'checked' : ''}> Numer zamówienia Allegro</label>
+        <label><input type="checkbox" id="inv-buyer-name"    ${(data.show_buyer_name    ?? true) ? 'checked' : ''}> <span data-i18n="inv.buyerName">${t('inv.buyerName')}</span></label>
+        <label><input type="checkbox" id="inv-buyer-address" ${(data.show_buyer_address ?? true) ? 'checked' : ''}> <span data-i18n="inv.buyerAddress">${t('inv.buyerAddress')}</span></label>
+        <label><input type="checkbox" id="inv-items"         ${(data.show_items         ?? true) ? 'checked' : ''}> <span data-i18n="inv.items">${t('inv.items')}</span></label>
+        <label><input type="checkbox" id="inv-price"         ${(data.show_price         ?? true) ? 'checked' : ''}> <span data-i18n="inv.price">${t('inv.price')}</span></label>
+        <label><input type="checkbox" id="inv-courier"       ${(data.show_courier       ?? true) ? 'checked' : ''}> <span data-i18n="inv.courier">${t('inv.courier')}</span></label>
+        <label><input type="checkbox" id="inv-pickup-point"  ${(data.show_pickup_point  ?? true) ? 'checked' : ''}> <span data-i18n="inv.pickupPoint">${t('inv.pickupPoint')}</span></label>
+        <label><input type="checkbox" id="inv-allegro-id"    ${(data.show_allegro_id    ?? true) ? 'checked' : ''}> <span data-i18n="inv.allegroId">${t('inv.allegroId')}</span></label>
       </div>
       <div class="settings-field">
-        <label>Tekst własny (maks. 160 znaków)</label>
-        <textarea id="inv-free-text" rows="2" maxlength="160" placeholder="np. Dziękujemy za zakup!">${esc(data.free_text || '')}</textarea>
+        <label data-i18n="inv.freeTextLabel">${t('inv.freeTextLabel')}</label>
+        <textarea id="inv-free-text" rows="2" maxlength="160" data-i18n-placeholder="inv.freeTextPlaceholder" placeholder="${esc(t('inv.freeTextPlaceholder'))}">${esc(data.free_text || '')}</textarea>
         <span id="inv-free-text-count" class="settings-char-count">${(data.free_text || '').length} / 160</span>
       </div>
       <p id="invoice-settings-note" class="settings-note hidden"></p>
       <div class="settings-actions">
-        <button class="btn btn-primary" id="invoice-settings-save">Zapisz</button>
+        <button class="btn btn-primary" id="invoice-settings-save" data-i18n="common.save">${t('common.save')}</button>
       </div>
     </div>
 
     <div class="settings-section">
-      <p class="settings-desc">Własny dokument PDF — drukowany przyciskiem "Własny dokument" podczas pakowania.</p>
+      <p class="settings-desc" data-i18n="settings.customDocDesc">${t('settings.customDocDesc')}</p>
       <div class="custom-doc-status ${docInfo.available ? 'available' : 'empty'}" id="custom-doc-status">
         ${docInfo.available
-          ? `<span>✓ Dokument wgrany</span><button class="btn btn-secondary btn-sm" id="btn-doc-delete">Usuń</button>`
-          : `<span class="dim">Brak dokumentu</span>`
+          ? `✓ <span data-i18n="settings.docUploaded">${t('settings.docUploaded')}</span><button class="btn btn-secondary btn-sm" id="btn-doc-delete" data-i18n="common.delete">${t('common.delete')}</button>`
+          : `<span class="dim" data-i18n="settings.docNone">${t('settings.docNone')}</span>`
         }
       </div>
       <div class="settings-field" style="margin-top:12px">
         <input type="file" id="custom-doc-file" accept=".pdf" style="display:none">
-        <button class="btn btn-secondary" id="btn-doc-pick">${docInfo.available ? 'Zastąp plik' : 'Wybierz plik PDF'}</button>
+        <button class="btn btn-secondary" id="btn-doc-pick">${docInfo.available ? esc(t('settings.docReplace')) : esc(t('settings.docChoose'))}</button>
         <span id="custom-doc-filename" class="dim" style="margin-left:10px;font-size:13px"></span>
       </div>
       <p id="custom-doc-note" class="settings-note hidden"></p>
     </div>
   `;
+
+  panel.querySelector('#btn-doc-pick').setAttribute('data-i18n', docInfo.available ? 'settings.docReplace' : 'settings.docChoose');
 
   panel.querySelector('#inv-free-text').addEventListener('input', function() {
     panel.querySelector('#inv-free-text-count').textContent = `${this.value.length} / 160`;
@@ -919,11 +1536,10 @@ async function renderSettingsDocuments(panel) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      note.textContent = '✓ Zapisano';
+      showNote(note, () => '✓ ' + t('settings.saved'));
     } catch (err) {
-      note.textContent = '✗ ' + err.message;
+      showNote(note, '✗ ' + err.message);
     }
-    note.classList.remove('hidden');
   });
 
   // Custom doc — file picker
@@ -940,22 +1556,21 @@ async function renderSettingsDocuments(panel) {
     try {
       res = await apiFetch('/print/custom-doc', { method: 'POST', body: form });
     } catch (err) {
-      note.textContent = '✗ ' + err.message;
-      note.classList.remove('hidden');
+      showNote(note, '✗ ' + err.message);
       return;
     }
     if (res.ok) {
       state.customDocAvailable = true;
-      note.textContent = '✓ Wgrano pomyślnie';
-      note.classList.remove('hidden');
+      showNote(note, () => '✓ ' + t('settings.docUploadedOk'));
       panel.querySelector('#custom-doc-status').outerHTML =
-        `<div class="custom-doc-status available" id="custom-doc-status"><span>✓ Dokument wgrany</span><button class="btn btn-secondary btn-sm" id="btn-doc-delete">Usuń</button></div>`;
-      panel.querySelector('#btn-doc-pick').textContent = 'Zastąp plik';
+        `<div class="custom-doc-status available" id="custom-doc-status">✓ <span data-i18n="settings.docUploaded">${t('settings.docUploaded')}</span><button class="btn btn-secondary btn-sm" id="btn-doc-delete" data-i18n="common.delete">${t('common.delete')}</button></div>`;
+      setText(panel.querySelector('#btn-doc-pick'), 'settings.docReplace');
       attachDeleteHandler(panel);
     } else {
       const err = await res.json();
-      note.textContent = '✗ ' + (err.detail || 'Błąd');
-      note.classList.remove('hidden');
+      // err.detail is upstream data — show it verbatim; only the generic
+      // fallback follows the language.
+      showNote(note, err.detail ? '✗ ' + err.detail : () => '✗ ' + t('settings.error'));
     }
   });
 
@@ -966,13 +1581,13 @@ async function renderSettingsDocuments(panel) {
       try {
         await api('/print/custom-doc', { method: 'DELETE' });
       } catch (err) {
-        reportError('Nie udało się usunąć dokumentu', err);
+        reportError(t('err.docDelete'), err);
         return;
       }
       state.customDocAvailable = false;
       p.querySelector('#custom-doc-status').outerHTML =
-        `<div class="custom-doc-status empty" id="custom-doc-status"><span class="dim">Brak dokumentu</span></div>`;
-      p.querySelector('#btn-doc-pick').textContent = 'Wybierz plik PDF';
+        `<div class="custom-doc-status empty" id="custom-doc-status"><span class="dim" data-i18n="settings.docNone">${t('settings.docNone')}</span></div>`;
+      setText(p.querySelector('#btn-doc-pick'), 'settings.docChoose');
       p.querySelector('#custom-doc-filename').textContent = '';
       attachDeleteHandler(p);
     });
@@ -985,13 +1600,20 @@ async function renderSettingsArchive(panel) {
 
   panel.innerHTML = `
     <div class="settings-section">
-      <p class="settings-desc">${entries.length ? `${entries.length} zarchiwizowanych zamówień.` : 'Archiwum jest puste.'}</p>
+      <p class="settings-desc" ${entries.length
+        ? `data-i18n="settings.archiveCount" data-i18n-count="${entries.length}" data-i18n-vars='{"n":${entries.length}}'`
+        : 'data-i18n="settings.archiveEmpty"'}>${entries.length ? t('settings.archiveCount', { n: entries.length }, entries.length) : t('settings.archiveEmpty')}</p>
       ${entries.length ? `<div class="archive-list">${entries.map(e => `<div class="archive-item">
         <span>${esc(e.allegro_id)}</span>
-        <span class="dim">${e.archived_at ? esc(new Date(e.archived_at).toLocaleString('pl-PL')) : 'brak daty'}</span>
+        <span class="dim" data-archived-at="${esc(e.archived_at || '')}"></span>
       </div>`).join('')}</div>` : ''}
     </div>
   `;
+
+  panel.querySelectorAll('[data-archived-at]').forEach(node => {
+    const value = node.getAttribute('data-archived-at');
+    bindDynamicText(node, () => (value ? formatDateTime(value) : t('settings.archiveNoDate')));
+  });
 }
 
 // ---- Sidebar events ----
@@ -1002,22 +1624,31 @@ document.querySelectorAll('.queue-item').forEach(el => {
 
 document.getElementById('btn-settings').addEventListener('click', () => renderQueue('settings'));
 
+function initLanguageControls() {
+  applyDocumentLanguage();
+  document.querySelectorAll('[data-lang-select]').forEach(select => {
+    select.addEventListener('change', () => setLanguage(select.value));
+  });
+  syncLanguageControls(document);
+  applyLanguage(document);
+}
+
 document.getElementById('btn-zakoncz').addEventListener('click', async () => {
-  if (!confirm('Zakończyć dzień i zarchiwizować wszystkie zamówienia z Gotowe?')) return;
+  if (!confirm(t('day.confirm'))) return;
   const doneOrders = state.orders.filter(o => o.status === 'done');
   if (!doneOrders.length) {
-    alert('Brak zamówień w Gotowe.');
+    alert(t('day.noneReady'));
     return;
   }
   const missing = doneOrders.filter(o => !o.shipment_id && !o.tracking_number);
   if (missing.length) {
-    const ok = confirm(`${missing.length} ${missing.length === 1 ? 'zamówienie nie ma' : 'zamówień nie ma'} utworzonej etykiety. Czy na pewno chcesz zakończyć dzień?`);
+    const ok = confirm(t('day.missingLabels', { n: missing.length }, missing.length));
     if (!ok) return;
   }
   try {
     await api('/orders/zakoncz-dzien', { method: 'POST' });
   } catch (err) {
-    reportError('Nie udało się zakończyć dnia', err);
+    reportError(t('err.endDay'), err);
     return;
   }
   await fetchAll();
@@ -1030,7 +1661,7 @@ document.getElementById('btn-sync').addEventListener('click', async () => {
   try {
     await api('/orders/sync', { method: 'POST' });
   } catch (err) {
-    reportError('Synchronizacja nie powiodła się', err);
+    reportError(t('err.sync'), err);
     return;
   } finally {
     btn.disabled = false;
@@ -1043,7 +1674,7 @@ document.getElementById('btn-auth').addEventListener('click', async () => {
     const data = await api('/orders/auth/url');
     window.location.href = data.url;
   } catch (e) {
-    alert('Błąd: ' + e.message);
+    alert(`${t('common.errorPrefix')}: ${e.message}`);
   }
 });
 
@@ -1060,7 +1691,8 @@ async function checkAuthStatus() {
     const data = await api('/orders/auth/status');
     const button = document.getElementById('btn-auth');
     button.style.display = 'block';
-    button.textContent = data.authorized ? 'Połącz ponownie Allegro' : 'Autoryzuj Allegro';
+    state.authorized = Boolean(data.authorized);
+    setText(button, data.authorized ? 'nav.reconnectAllegro' : 'nav.authorizeAllegro');
   } catch {}
 }
 
@@ -1082,16 +1714,26 @@ async function startApp() {
   await Promise.all([fetchAll(), checkAuthStatus(), checkCustomDoc()]);
 }
 
-function setupMessage(message, isError = false) {
+function setupMessage(content, isError = false) {
   const el = document.getElementById('setup-message');
-  el.textContent = message;
+  if (!el) return;
   el.classList.toggle('error', isError);
+  if (typeof content === 'function') {
+    el.removeAttribute('data-i18n');
+    bindStaticText(el, content);
+    return;
+  }
+  // A raw message (usually an upstream error) has no catalog key: detach it so a
+  // language switch never overwrites it with unrelated catalog text.
+  clearStaticText(el);
+  el.removeAttribute('data-i18n');
+  el.textContent = content || '';
 }
 
 async function boot() {
   const retry = document.getElementById('setup-retry');
   retry.classList.add('hidden');
-  setupMessage('Sprawdzanie konfiguracji…');
+  setupMessage(() => t('setup.checking'));
   try {
     const status = await api('/setup/status');
     if (status.configured) {
@@ -1099,9 +1741,8 @@ async function boot() {
       return;
     }
     const form = document.getElementById('setup-form');
-    document.getElementById('setup-environment').textContent = status.sandbox
-      ? 'Środowisko: Allegro Sandbox. Użyj danych aplikacji testowej.'
-      : 'Środowisko: Allegro. Użyj danych aplikacji produkcyjnej.';
+    setText(document.getElementById('setup-environment'),
+      status.sandbox ? 'setup.envSandbox' : 'setup.envProduction');
     document.getElementById('setup-redirect-uri').textContent = status.redirect_uri;
     form.classList.remove('hidden');
     setupMessage('');
@@ -1111,7 +1752,7 @@ async function boot() {
       const clientId = document.getElementById('setup-client-id');
       const clientSecret = document.getElementById('setup-client-secret');
       submit.disabled = true;
-      submit.textContent = 'Zapisywanie…';
+      setText(submit, 'setup.saving');
       setupMessage('');
       try {
         // Existing installations keep their current operator authentication.
@@ -1129,22 +1770,22 @@ async function boot() {
           accessToken = result.access_token;
           document.getElementById('setup-access-token').value = result.access_token;
           document.getElementById('setup-success').classList.remove('hidden');
-          setupMessage('Dane Allegro zapisane. Zachowaj token dostępu przed przejściem do aplikacji.');
+          setupMessage(() => t('setup.savedMsg'));
           document.getElementById('setup-access-token').focus();
         } else {
           await startApp();
         }
       } catch (err) {
-        setupMessage(err.message || 'Nie udało się zapisać konfiguracji.', true);
+        setupMessage(err.message ? err.message : () => t('setup.saveFailed'), true);
         retry.classList.remove('hidden');
       } finally {
         submit.disabled = false;
-        submit.textContent = 'Zapisz i kontynuuj';
+        setText(submit, 'setup.submit');
       }
     };
     document.getElementById('setup-client-id').focus();
   } catch (err) {
-    setupMessage(err.message || 'Nie udało się sprawdzić konfiguracji.', true);
+    setupMessage(err.message ? err.message : () => t('setup.statusFailed'), true);
     retry.classList.remove('hidden');
   }
 }
@@ -1158,14 +1799,15 @@ document.getElementById('setup-copy-token').addEventListener('click', async () =
   const field = document.getElementById('setup-access-token');
   try {
     await navigator.clipboard.writeText(field.value);
-    setupMessage('Token skopiowany. Zachowaj go w bezpiecznym miejscu.');
+    setupMessage(() => t('setup.tokenCopied'));
   } catch {
     field.focus();
     field.select();
-    setupMessage('Skopiuj zaznaczony token i zachowaj go w bezpiecznym miejscu.');
+    setupMessage(() => t('setup.tokenCopyManual'));
   }
 });
 
+initLanguageControls();
 boot();
 
 // Check every 30s in case user just came back from Allegro auth page

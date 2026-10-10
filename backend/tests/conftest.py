@@ -9,7 +9,7 @@ import pytest
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_DIR))
 
-PACKAGE_MODULES = ("store", "main", "configuration", "api", "api.allegro", "routes")
+PACKAGE_MODULES = ("store", "main", "configuration", "localization", "api", "api.allegro", "routes")
 
 
 def sample_order(order_id="o-1", allegro_id="a-1", **overrides):

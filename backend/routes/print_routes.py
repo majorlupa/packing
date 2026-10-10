@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 import store
 import api.allegro as allegro
 from api.allegro import to_http_exception
+from localization import current_language, date_format, t
 
 router = APIRouter(prefix="/print", tags=["print"])
 
@@ -51,20 +52,20 @@ def _order_lock(order_id: str) -> asyncio.Lock:
 def _build_invoice_html(order_id: str) -> str:
     order = store.get_order(order_id)
     if order is None:
-        raise HTTPException(status_code=404, detail="Order not found.")
+        raise HTTPException(status_code=404, detail=t("error.order_not_found"))
     s = store.get_invoice_settings()
 
     rows = []
     if s.get("show_buyer_name") and order.buyer_name:
-        rows.append(("Kupujący", order.buyer_name, True))
+        rows.append((t("doc.buyer"), order.buyer_name, True))
     if s.get("show_buyer_address") and order.buyer_address:
-        rows.append(("Adres", order.buyer_address.replace("\n", "<br>"), False))
+        rows.append((t("doc.address"), order.buyer_address.replace("\n", "<br>"), False))
     if s.get("show_courier") and order.courier:
-        rows.append(("Kurier", order.courier, False))
+        rows.append((t("doc.courier"), order.courier, False))
     if s.get("show_pickup_point") and order.pickup_point:
-        rows.append(("Punkt odbioru", order.pickup_point, True))
+        rows.append((t("doc.pickup_point"), order.pickup_point, True))
     if s.get("show_allegro_id"):
-        rows.append(("Nr zamówienia", order.allegro_id, False))
+        rows.append((t("doc.order_number"), order.allegro_id, False))
 
     show_price = s.get("show_price") and s.get("show_items")
     items = order.items if s.get("show_items") else []
@@ -72,9 +73,18 @@ def _build_invoice_html(order_id: str) -> str:
     if show_price and items and all(i.unit_price is not None for i in items):
         total = sum(i.unit_price * i.quantity for i in items)
 
+    labels = {
+        name: t(f"doc.{name}")
+        for name in ("title", "products", "product", "quantity", "unit_price", "value", "total")
+    }
+    # The language is read from the request scope set by the middleware, so the
+    # rendered document matches the Accept-Language of this very request.
+    language = current_language.get()
     template = _jinja.get_template("invoice.html")
     return template.render(
-        date=date.today().strftime("%-d.%-m.%Y"),
+        lang=language,
+        labels=labels,
+        date=date.today().strftime(date_format(language)),
         rows=rows,
         items=items,
         show_price=show_price,
@@ -166,7 +176,7 @@ async def print_label(
     async with _order_lock(order_id):
         order = store.get_order(order_id)
         if order is None:
-            raise HTTPException(status_code=404, detail="Order not found.")
+            raise HTTPException(status_code=404, detail=t("error.order_not_found"))
 
         settings = store.get_shipment_settings()
         package = dict(settings["package"])
@@ -178,7 +188,7 @@ async def print_label(
             if not order.parcel_size and not (length and width and height):
                 raise HTTPException(
                     status_code=400,
-                    detail="Wybierz gabaryt paczki (A, B lub C) dla Paczkomatu InPost.",
+                    detail=t("label.select_size"),
                 )
             if order.parcel_size in INPOST_LOCKER_SIZES:
                 dims = INPOST_LOCKER_SIZES[order.parcel_size]
@@ -225,7 +235,7 @@ async def print_label(
         except allegro.AllegroError as exc:
             raise to_http_exception(exc)
         except httpx.HTTPError as exc:
-            raise HTTPException(status_code=502, detail=f"Brak łączności z Allegro: {exc}")
+            raise HTTPException(status_code=502, detail=t("common.allegro_unreachable", error=exc))
 
     return Response(content=label_bytes, media_type="application/pdf")
 
@@ -240,7 +250,7 @@ async def shipment_info(order_id: str):
     """
     order = store.get_order(order_id)
     if order is None:
-        raise HTTPException(status_code=404, detail="Order not found.")
+        raise HTTPException(status_code=404, detail=t("error.order_not_found"))
     tracking_number = order.tracking_number
     if order.shipment_id and not tracking_number:
         try:
@@ -300,12 +310,12 @@ def custom_doc_info():
 @router.post("/custom-doc")
 async def upload_custom_doc(file: UploadFile = File(...)):
     if not (file.filename or "").lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Wymagany plik PDF.")
+        raise HTTPException(status_code=400, detail=t("print.pdf_required"))
     payload = await file.read(MAX_CUSTOM_DOC_BYTES + 1)
     if len(payload) > MAX_CUSTOM_DOC_BYTES:
-        raise HTTPException(status_code=413, detail="Plik jest za duży (limit 20 MB).")
+        raise HTTPException(status_code=413, detail=t("print.file_too_large"))
     if not payload.startswith(b"%PDF-"):
-        raise HTTPException(status_code=400, detail="To nie jest plik PDF.")
+        raise HTTPException(status_code=400, detail=t("print.not_a_pdf"))
     CUSTOM_DOC_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = CUSTOM_DOC_PATH.with_name(CUSTOM_DOC_PATH.name + ".tmp")
     with open(tmp, "wb") as handle:
@@ -319,7 +329,7 @@ async def upload_custom_doc(file: UploadFile = File(...)):
 @router.get("/custom-doc")
 def serve_custom_doc():
     if not os.path.exists(CUSTOM_DOC_PATH):
-        raise HTTPException(status_code=404, detail="Brak wgranego dokumentu.")
+        raise HTTPException(status_code=404, detail=t("print.custom_doc_missing"))
     with open(CUSTOM_DOC_PATH, "rb") as handle:
         content = handle.read()
     return Response(content=content, media_type="application/pdf")

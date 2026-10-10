@@ -20,6 +20,7 @@ from models.order import Order, OrderItem
 import uuid
 
 import store
+from localization import t
 
 logger = logging.getLogger("packing.allegro")
 
@@ -124,10 +125,15 @@ async def _refresh_access_token() -> None:
         )
     if response.status_code in (400, 401):
         _forget_token()
-        raise AllegroNotAuthorized("Sesja Allegro wygasła. Kliknij 'Autoryzuj Allegro'.")
+        raise AllegroNotAuthorized(t("allegro.session_expired"))
     if not response.is_success:
-        raise AllegroError(f"Allegro refresh token {response.status_code}: {response.text[:300]}")
-    _store_token(_json_object(response, "odświeżenie tokenu"))
+        raise AllegroError(t(
+            "allegro.api_error",
+            what=t("allegro.op.refresh_token"),
+            status=response.status_code,
+            detail=response.text[:300],
+        ))
+    _store_token(_json_object(response, "allegro.what.token_refresh"))
 
 
 async def _access_token() -> str:
@@ -136,13 +142,13 @@ async def _access_token() -> str:
     if _token and (_expires_at == 0.0 or time.time() < _expires_at - 60):
         return _token
     if not _refresh_token:
-        raise AllegroNotAuthorized("Allegro nie jest autoryzowane. Kliknij 'Autoryzuj Allegro'.")
+        raise AllegroNotAuthorized(t("allegro.not_authorized"))
     async with _token_lock:
         # Another request may have refreshed while this one waited for the lock.
         if _token and _expires_at != 0.0 and time.time() < _expires_at - 60:
             return _token
         if not _refresh_token:
-            raise AllegroNotAuthorized("Allegro nie jest autoryzowane. Kliknij 'Autoryzuj Allegro'.")
+            raise AllegroNotAuthorized(t("allegro.not_authorized"))
         await _refresh_access_token()
     return _token
 
@@ -179,8 +185,13 @@ async def exchange_code(code: str):
             auth=(CLIENT_ID, CLIENT_SECRET),
         )
         if not r.is_success:
-            raise AllegroError(f"Allegro token exchange {r.status_code}: {r.text[:300]}")
-        _store_token(_json_object(r, "wymiana kodu"))
+            raise AllegroError(t(
+                "allegro.api_error",
+                what=t("allegro.op.token_exchange"),
+                status=r.status_code,
+                detail=r.text[:300],
+            ))
+        _store_token(_json_object(r, "allegro.what.code_exchange"))
 
 
 def _error_messages(errors: object) -> str:
@@ -202,17 +213,21 @@ def _shipment_error(response: httpx.Response) -> str:
     except ValueError:
         payload = None
     detail = _error_messages(payload.get("errors")) if isinstance(payload, dict) else ""
-    return detail or "Sprawdź ustawienia Wysyłam z Allegro i uprawnienia aplikacji do przesyłek."
+    return detail or t("allegro.shipment_hint")
 
 
 def _json_object(response: httpx.Response, what: str) -> dict:
-    """Parse an Allegro body; a gateway HTML page must become a 502, not a 500."""
+    """Parse an Allegro body; a gateway HTML page must become a 502, not a 500.
+
+    ``what`` is a message key naming the payload, so the error can be reported in
+    the request's language while the upstream body stays untranslated.
+    """
     try:
         payload = response.json()
     except ValueError as exc:
-        raise AllegroError(f"Allegro zwróciło nieprawidłowe dane ({what}).") from exc
+        raise AllegroError(t("allegro.invalid_data", what=t(what))) from exc
     if not isinstance(payload, dict):
-        raise AllegroError(f"Allegro zwróciło nieprawidłowe dane ({what}).")
+        raise AllegroError(t("allegro.invalid_data", what=t(what)))
     return payload
 
 
@@ -237,7 +252,7 @@ def _dry_run_label(page_size: str) -> bytes:
     width, height = {"A4": (595, 842), "A6": (298, 420)}.get(page_size.upper(), (298, 420))
     writer = PdfWriter()
     writer.add_blank_page(width=width, height=height)
-    writer.add_metadata({"/Title": "DRY RUN — testowa etykieta", "/Producer": "Weles"})
+    writer.add_metadata({"/Title": t("label.dry_run_title"), "/Producer": "Weles"})
     out = io.BytesIO()
     writer.write(out)
     return out.getvalue()
@@ -262,23 +277,23 @@ async def create_shipment(order, sender: dict, package: dict) -> str:
             headers=headers,
         )
         if proposal.status_code == 401:
-            raise AllegroNotAuthorized("Sesja Allegro wygasła. Kliknij 'Autoryzuj Allegro'.")
+            raise AllegroNotAuthorized(t("allegro.session_expired"))
         if not proposal.is_success:
             raise AllegroError(
-                f"Nie udało się pobrać danych wysyłki z Allegro ({proposal.status_code}). "
-                f"{_shipment_error(proposal)}"
+                t(
+                    "allegro.delivery_proposals_failed",
+                    status=proposal.status_code,
+                    detail=_shipment_error(proposal),
+                )
             )
-        suggested = _json_object(proposal, "propozycje wysyłki").get("suggestedInput")
+        suggested = _json_object(proposal, "allegro.what.delivery_proposals").get("suggestedInput")
         if not isinstance(suggested, dict):
-            raise AllegroError("Allegro nie zwróciło proponowanych danych wysyłki.")
+            raise AllegroError(t("allegro.no_suggested_input"))
         if not isinstance(suggested.get("sender"), dict) or not suggested["sender"]:
-            raise AllegroError(
-                "Brak danych nadawcy w Allegro. Dodaj domyślny adres w książce adresowej "
-                "Wysyłam z Allegro, a następnie spróbuj ponownie."
-            )
+            raise AllegroError(t("allegro.no_sender"))
         receiver = suggested.get("receiver")
         if not isinstance(receiver, dict) or not receiver.get("email"):
-            raise AllegroError("Allegro nie zwróciło danych odbiorcy z adresem e-mail zamówienia.")
+            raise AllegroError(t("allegro.no_receiver"))
 
         shipment_input = dict(suggested)
         shipment_input["packages"] = [{
@@ -301,10 +316,15 @@ async def create_shipment(order, sender: dict, package: dict) -> str:
             json=payload,
         )
         if not r.is_success:
-            raise AllegroError(f"Allegro create shipment {r.status_code}: {_shipment_error(r)}")
-        command_id = _json_object(r, "utworzenie przesyłki").get("commandId")
+            raise AllegroError(t(
+                "allegro.api_error",
+                what=t("allegro.op.create_shipment"),
+                status=r.status_code,
+                detail=_shipment_error(r),
+            ))
+        command_id = _json_object(r, "allegro.what.shipment_create").get("commandId")
         if not isinstance(command_id, str) or not command_id:
-            raise AllegroError("Brak commandId w odpowiedzi Allegro.")
+            raise AllegroError(t("allegro.no_command_id"))
 
         # Poll for result
         for _ in range(15):
@@ -317,19 +337,24 @@ async def create_shipment(order, sender: dict, package: dict) -> str:
                 },
             )
             if not r.is_success:
-                raise AllegroError(f"Allegro shipment status {r.status_code}: {r.text[:300]}")
-            data = _json_object(r, "status przesyłki")
+                raise AllegroError(t(
+                    "allegro.api_error",
+                    what=t("allegro.op.shipment_status"),
+                    status=r.status_code,
+                    detail=r.text[:300],
+                ))
+            data = _json_object(r, "allegro.what.shipment_status")
             status = data.get("status")
             if status == "SUCCESS":
                 shipment_id = data.get("shipmentId")
                 if not isinstance(shipment_id, str) or not shipment_id:
-                    raise AllegroError("Allegro nie zwróciło identyfikatora utworzonej przesyłki.")
+                    raise AllegroError(t("allegro.no_shipment_id"))
                 return shipment_id
             if status == "ERROR":
                 msg = _error_messages(data.get("errors")) or "unknown"
-                raise AllegroError(f"Allegro shipment creation failed: {msg}")
+                raise AllegroError(t("allegro.shipment_creation_failed", detail=msg))
 
-    raise AllegroError("Przekroczono czas oczekiwania na utworzenie przesyłki.")
+    raise AllegroError(t("allegro.shipment_timeout"))
 
 
 async def download_label(shipment_id: str, page_size: str = "A6") -> bytes:
@@ -349,14 +374,16 @@ async def download_label(shipment_id: str, page_size: str = "A6") -> bytes:
             json={"shipmentIds": [shipment_id], "pageSize": page_size},
         )
         if r.status_code == 204:
-            raise AllegroError("Allegro nie ma jeszcze etykiety dla tej przesyłki.")
+            raise AllegroError(t("allegro.no_label_yet"))
         if not r.is_success:
-            raise AllegroError(f"Allegro label API {r.status_code}: {r.text[:300]}")
+            raise AllegroError(t(
+                "allegro.api_error",
+                what=t("allegro.op.label"),
+                status=r.status_code,
+                detail=r.text[:300],
+            ))
         if not r.content.startswith(b"%PDF-"):
-            raise AllegroError(
-                "Allegro zwróciło etykietę w formacie innym niż PDF. "
-                "Istniejącą etykietę ZPL pobierz w Wysyłam z Allegro; nowe etykiety w aplikacji są PDF."
-            )
+            raise AllegroError(t("allegro.label_not_pdf"))
         return r.content
 
 
@@ -405,7 +432,7 @@ async def get_shipment_tracking(shipment_id: str) -> str | None:
                 headers=headers,
             )
             if r.is_success:
-                return _waybill_from_shipment(_json_object(r, "szczegóły przesyłki"))
+                return _waybill_from_shipment(_json_object(r, "allegro.what.shipment_details"))
     except Exception as exc:
         logger.warning("Nie udało się pobrać numeru nadania dla %s: %s", shipment_id, exc)
     return None
@@ -492,8 +519,13 @@ async def fetch_orders(limit: int = 100) -> List[Order]:
                 params={"status": "READY_FOR_PROCESSING", "limit": limit, "offset": page * limit},
             )
             if not r.is_success:
-                raise AllegroError(f"Allegro checkout-forms {r.status_code}: {r.text[:300]}")
-            forms = _json_object(r, "lista zamówień").get("checkoutForms") or []
+                raise AllegroError(t(
+                    "allegro.api_error",
+                    what="checkout-forms",
+                    status=r.status_code,
+                    detail=r.text[:300],
+                ))
+            forms = _json_object(r, "allegro.what.order_list").get("checkoutForms") or []
             for form in forms:
                 try:
                     orders.append(_order_from_form(form))
@@ -510,11 +542,15 @@ async def fetch_orders(limit: int = 100) -> List[Order]:
                 params={"status": "READY_FOR_PROCESSING", "limit": 1, "offset": MAX_SYNC_PAGES * limit},
             )
             if not r.is_success:
-                raise AllegroError(f"Allegro checkout-forms {r.status_code}: {r.text[:300]}")
-            if _json_object(r, "lista zamówień").get("checkoutForms"):
+                raise AllegroError(t(
+                    "allegro.api_error",
+                    what="checkout-forms",
+                    status=r.status_code,
+                    detail=r.text[:300],
+                ))
+            if _json_object(r, "allegro.what.order_list").get("checkoutForms"):
                 raise AllegroError(
-                    f"Niepełna synchronizacja: przekroczono limit {MAX_SYNC_PAGES * limit} zamówień. "
-                    "Nie zapisano wyników tej synchronizacji."
+                    t("orders.incomplete_sync", limit=MAX_SYNC_PAGES * limit)
                 )
     return orders
 

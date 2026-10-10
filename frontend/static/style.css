@@ -502,3 +502,32 @@ body {
 .parcel-size-option input:focus-visible + span { outline: 3px solid #78e5bf; outline-offset: 3px; }
 .parcel-size-note { margin: 12px 0; color: var(--text-dim); font-size: 13px; line-height: 1.5; }
 .parcel-sizes:disabled { opacity: 0.7; }
+
+/* ---- Language switch ---- */
+.lang-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 14px;
+}
+.lang-switch label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+  margin: 0;
+  font-weight: 600;
+}
+.lang-select {
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid #555;
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.lang-select:focus-visible { outline: 2px solid var(--accent2); outline-offset: 2px; }
+.setup-card .lang-switch { justify-content: flex-end; margin: 0 0 8px 0; }
+#sidebar .lang-switch { margin-top: auto; padding-top: 12px; }

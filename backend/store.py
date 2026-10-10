@@ -21,6 +21,7 @@ from typing import Callable, Dict, List, Optional, TypeVar
 
 from pydantic import ValidationError
 
+from localization import t
 from models.order import Order, PickingList
 
 DATA_DIR = Path(os.getenv("PACKING_DATA_DIR", "/app/data"))
@@ -108,7 +109,7 @@ def _merged(defaults: dict, saved: object) -> dict:
 def _normalise(raw: object) -> dict:
     """Coerce whatever is on disk into the current schema, quarantining bad records."""
     if not isinstance(raw, dict):
-        raise StateError(f"{DATA_FILE} does not contain a JSON object.")
+        raise StateError(t("store.state_not_object", path=DATA_FILE))
 
     state = _default_state()
     quarantine: List[dict] = [q for q in (raw.get("quarantine") or []) if isinstance(q, dict)][:_MAX_QUARANTINE]
@@ -121,7 +122,7 @@ def _normalise(raw: object) -> dict:
             except (ValidationError, TypeError) as exc:
                 quarantine.append({"kind": "order", "id": key, "error": str(exc)[:500], "record": value})
     elif raw_orders not in (None, {}):
-        quarantine.append({"kind": "orders-collection", "id": "orders", "error": "nie jest obiektem", "record": None})
+        quarantine.append({"kind": "orders-collection", "id": "orders", "error": t("store.orders_collection"), "record": None})
 
     counter = raw.get("picking_list_counter")
     state["picking_list_counter"] = counter if isinstance(counter, int) and counter >= 0 else 0
@@ -161,7 +162,7 @@ def _normalise(raw: object) -> dict:
         "quarantined": len(quarantine),
         "repaired": repaired,
         "message": (
-            f"{len(quarantine)} rekord(ów) pominięto — dane nie przechodzą walidacji."
+            t("store.quarantined", count=len(quarantine))
             if quarantine else ""
         ),
     }
@@ -174,16 +175,15 @@ def _read_backup(problem: str) -> dict:
         return _normalise(json.loads(BACKUP_FILE.read_text(encoding="utf-8")))
     except (json.JSONDecodeError, UnicodeDecodeError, OSError, StateError) as exc:
         raise StateError(
-            f"Nie można odczytać {DATA_FILE} ({problem}) ani kopii zapasowej {BACKUP_FILE} ({exc}). "
-            "Pliki nie zostały nadpisane — przywróć stan ręcznie lub popraw pliki i zrestartuj kontener."
+            t("store.unreadable_and_no_backup", path=DATA_FILE, problem=problem, backup=BACKUP_FILE, exc=exc)
         ) from exc
 
 
 def _load() -> dict:
     if not DATA_FILE.exists():
         if BACKUP_FILE.exists():
-            state = _read_backup("brak pliku")
-            state["_status"].update(ok=False, message="Brak/czytelnego state.json nie było — odtworzono z kopii zapasowej.")
+            state = _read_backup(t("store.problem_missing_file"))
+            state["_status"].update(ok=False, message=t("store.recovered_from_backup"))
             return state
         state = _default_state()
         state["_status"] = {"ok": True, "quarantined": 0, "repaired": 0, "message": ""}
@@ -194,8 +194,7 @@ def _load() -> dict:
     except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
         if not BACKUP_FILE.exists():
             raise StateError(
-                f"Nie można odczytać {DATA_FILE} ({exc}). Plik NIE został nadpisany — "
-                "przywróć go ręcznie z kopii zapasowej lub popraw i zrestartuj kontener."
+                t("store.unreadable_no_backup", path=DATA_FILE, exc=exc)
             ) from exc
         broken = DATA_FILE.with_name(f"state.json.corrupt-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
         try:
@@ -205,7 +204,7 @@ def _load() -> dict:
         state = _read_backup(str(exc))
         state["_status"].update(
             ok=False,
-            message=f"state.json był uszkodzony — odtworzono z kopii zapasowej ({broken.name}).",
+            message=t("store.corrupt_recovered", name=broken.name),
         )
         return state
 

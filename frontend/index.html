@@ -10,59 +10,73 @@
   <section id="setup" class="setup-shell" aria-labelledby="setup-title">
     <div class="setup-card">
       <p class="setup-brand">Weles</p>
-      <h1 id="setup-title">Połącz swoje Allegro</h1>
-      <p class="setup-intro">Skonfiguruj dostęp do Allegro, aby pobierać zamówienia i przygotowywać przesyłki.</p>
-      <p id="setup-message" class="setup-message" role="status" aria-live="polite">Sprawdzanie konfiguracji…</p>
+      <div class="lang-switch">
+        <label for="setup-lang" data-i18n="nav.language">Język</label>
+        <select id="setup-lang" class="lang-select" data-lang-select aria-label="Język" data-i18n-aria="nav.language">
+          <option value="pl">Polski</option>
+          <option value="en">English</option>
+        </select>
+      </div>
+      <h1 id="setup-title" data-i18n="setup.title">Połącz swoje Allegro</h1>
+      <p class="setup-intro" data-i18n="setup.intro">Skonfiguruj dostęp do Allegro, aby pobierać zamówienia i przygotowywać przesyłki.</p>
+      <p id="setup-message" class="setup-message" role="status" aria-live="polite" data-i18n="setup.checking">Sprawdzanie konfiguracji…</p>
 
       <form id="setup-form" class="hidden">
-        <p class="setup-help">Utwórz aplikację w <a href="https://developer.allegro.pl/" target="_blank" rel="noopener noreferrer">panelu deweloperskim Allegro</a> i skopiuj jej dane poniżej.</p>
+        <p class="setup-help" data-i18n-html="setup.createAppHtml">Utwórz aplikację w <a href="https://developer.allegro.pl/" target="_blank" rel="noopener noreferrer">panelu deweloperskim Allegro</a> i skopiuj jej dane poniżej.</p>
         <p id="setup-environment" class="setup-help"></p>
-        <p class="setup-help">Adres przekierowania aplikacji Allegro:</p>
+        <p class="setup-help" data-i18n="setup.redirectLabel">Adres przekierowania aplikacji Allegro:</p>
         <code id="setup-redirect-uri" class="setup-code"></code>
         <label for="setup-client-id">Client ID</label>
         <input id="setup-client-id" name="client_id" type="text" required maxlength="4096" autocomplete="off" spellcheck="false" autocapitalize="none" />
         <label for="setup-client-secret">Client Secret</label>
         <input id="setup-client-secret" name="client_secret" type="password" required maxlength="4096" autocomplete="off" spellcheck="false" autocapitalize="none" />
-        <p class="setup-help">Dane zostaną zapisane na serwerze. Client Secret nie będzie wyświetlany ponownie.</p>
-        <button id="setup-submit" class="btn btn-primary" type="submit">Zapisz i kontynuuj</button>
+        <p class="setup-help" data-i18n="setup.saveNote">Dane zostaną zapisane na serwerze. Client Secret nie będzie wyświetlany ponownie.</p>
+        <button id="setup-submit" class="btn btn-primary" type="submit" data-i18n="setup.submit">Zapisz i kontynuuj</button>
       </form>
 
       <div id="setup-success" class="hidden">
-        <h2>Dane Allegro zapisane</h2>
-        <p class="setup-help">Zachowaj poniższy token dostępu w bezpiecznym miejscu. Weles poprosi o niego przy kolejnym otwarciu aplikacji.</p>
-        <label for="setup-access-token">Token dostępu Weles</label>
+        <h2 data-i18n="setup.savedTitle">Dane Allegro zapisane</h2>
+        <p class="setup-help" data-i18n="setup.saveTokenNote">Zachowaj poniższy token dostępu w bezpiecznym miejscu. Weles poprosi o niego przy kolejnym otwarciu aplikacji.</p>
+        <label for="setup-access-token" data-i18n="setup.accessTokenLabel">Token dostępu Weles</label>
         <input id="setup-access-token" type="text" readonly autocomplete="off" spellcheck="false" />
-        <button id="setup-copy-token" class="btn btn-secondary" type="button">Kopiuj token</button>
-        <button id="setup-continue" class="btn btn-primary" type="button">Przejdź do aplikacji</button>
+        <button id="setup-copy-token" class="btn btn-secondary" type="button" data-i18n="setup.copyToken">Kopiuj token</button>
+        <button id="setup-continue" class="btn btn-primary" type="button" data-i18n="setup.continue">Przejdź do aplikacji</button>
       </div>
 
-      <button id="setup-retry" class="btn btn-secondary hidden" type="button">Sprawdź ponownie</button>
+      <button id="setup-retry" class="btn btn-secondary hidden" type="button" data-i18n="setup.retry">Sprawdź ponownie</button>
     </div>
   </section>
 
   <div id="app" class="hidden">
     <aside id="sidebar">
       <h1 id="app-name">Weles</h1>
-      <h2>Kolejki</h2>
+      <h2 data-i18n="nav.queues">Kolejki</h2>
       <ul>
         <li class="queue-item active" data-queue="pending">
-          Oczekujące <span id="count-pending" class="badge">0</span>
+          <span data-i18n="nav.pending">Oczekujące</span> <span id="count-pending" class="badge">0</span>
         </li>
         <li class="queue-item" data-queue="picking">
-          Kompletowanie <span id="count-picking" class="badge">0</span>
+          <span data-i18n="nav.picking">Kompletowanie</span> <span id="count-picking" class="badge">0</span>
         </li>
         <li class="queue-item" data-queue="packing">
-          Pakowanie <span id="count-packing" class="badge">0</span>
+          <span data-i18n="nav.packing">Pakowanie</span> <span id="count-packing" class="badge">0</span>
         </li>
         <li class="queue-item" data-queue="done">
-          Gotowe <span id="count-done" class="badge">0</span>
+          <span data-i18n="nav.done">Gotowe</span> <span id="count-done" class="badge">0</span>
         </li>
       </ul>
       <hr />
-      <button id="btn-sync">↻ Pobierz zamówienia</button>
-      <button id="btn-auth">Autoryzuj Allegro</button>
-      <button id="btn-zakoncz">Zakończ dzień</button>
-      <button id="btn-settings">⚙ Ustawienia</button>
+      <button id="btn-sync">↻ <span data-i18n="nav.sync">Pobierz zamówienia</span></button>
+      <button id="btn-auth" data-i18n="nav.authorizeAllegro">Autoryzuj Allegro</button>
+      <button id="btn-zakoncz"><span data-i18n="nav.endDay">Zakończ dzień</span></button>
+      <button id="btn-settings">⚙ <span data-i18n="nav.settings">Ustawienia</span></button>
+      <div class="lang-switch">
+        <label for="lang-select" data-i18n="nav.language">Język</label>
+        <select id="lang-select" class="lang-select" data-lang-select aria-label="Język" data-i18n-aria="nav.language">
+          <option value="pl">Polski</option>
+          <option value="en">English</option>
+        </select>
+      </div>
     </aside>
 
     <main id="content">

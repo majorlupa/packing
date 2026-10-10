@@ -3,15 +3,17 @@ import logging
 import os
 import secrets
 import time
+from html import escape
 
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 from typing import List
 import httpx
 
 import store
 import api.allegro as allegro
 from api.allegro import to_http_exception
+from localization import DEFAULT_LANGUAGE, negotiate_language, t
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 logger = logging.getLogger("packing.orders")
@@ -30,6 +32,50 @@ BACKFILL_FIELDS = (
 UI_BASE_URL = os.getenv("PACKING_BASE_URL", "http://localhost:3001")
 _oauth_state: str | None = None
 _oauth_state_deadline = 0.0
+# The language chosen when the operator started the OAuth flow, so the callback
+# page (a plain browser navigation, possibly with a different Accept-Language)
+# answers in the language the operator actually chose. Cleared with the state.
+_oauth_language: str = DEFAULT_LANGUAGE
+
+# Browser-facing page for a failed authorization. The message comes from a query
+# parameter, so it is HTML-escaped — never injected as markup.
+OAUTH_ERROR_PAGE = """<!DOCTYPE html>
+<html lang="{lang}">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<style>
+  body {{ font-family: system-ui, 'Segoe UI', Arial, sans-serif; background: #f6f7f9;
+         color: #1a1a1a; margin: 0; display: grid; place-items: center; min-height: 100vh; }}
+  main {{ background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
+          padding: 28px 32px; max-width: 460px; box-shadow: 0 1px 3px rgba(0,0,0,.06); }}
+  h1 {{ font-size: 18px; margin: 0 0 12px; }}
+  p {{ line-height: 1.55; margin: 0 0 16px; }}
+  a {{ color: #1d4ed8; }}
+</style>
+</head>
+<body>
+<main>
+  <h1>{title}</h1>
+  <p>{message}</p>
+  <p><a href="{back_url}">{back_label}</a></p>
+</main>
+</body>
+</html>
+"""
+
+
+def _oauth_error_page(language: str, message: str, status_code: int = 400) -> HTMLResponse:
+    """Localized HTML page for a failed OAuth callback, in the given language."""
+    html = OAUTH_ERROR_PAGE.format(
+        lang=escape(language),
+        title=escape(t("oauth.callback_title", lang=language)),
+        message=escape(message),
+        back_url=escape(f"{UI_BASE_URL}/", quote=True),
+        back_label=escape(t("oauth.callback_back", lang=language)),
+    )
+    return HTMLResponse(content=html, status_code=status_code, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/", response_model=List[dict])
@@ -68,7 +114,7 @@ async def sync_from_allegro():
     except (allegro.AllegroError, httpx.HTTPError) as exc:
         if isinstance(exc, allegro.AllegroError):
             raise to_http_exception(exc)
-        raise HTTPException(status_code=502, detail=f"Brak łączności z Allegro: {exc}")
+        raise HTTPException(status_code=502, detail=t("common.allegro_unreachable", error=exc))
 
     def mutate(state):
         # Read the archive inside the transaction: a concurrent "end of day" must not be missed.
@@ -110,10 +156,7 @@ async def seed_mock_orders():
     if not allegro.dry_run_enabled():
         raise HTTPException(
             status_code=409,
-            detail=(
-                "Zamówienia testowe są dostępne tylko przy PACKING_SHIPMENT_DRY_RUN=1. "
-                "Nie włączaj tego trybu na produkcji."
-            ),
+            detail=t("orders.seed_mock_disabled"),
         )
     mock_orders = allegro._generate_mock_orders()
 
@@ -156,16 +199,24 @@ async def auth_status():
 
 
 @router.get("/auth/url")
-async def auth_url():
-    global _oauth_state, _oauth_state_deadline
+async def auth_url(request: Request):
+    global _oauth_state, _oauth_state_deadline, _oauth_language
     _oauth_state = secrets.token_urlsafe(32)
     _oauth_state_deadline = time.monotonic() + 600
+    # Remember the language of the request that started the flow: the callback
+    # is a browser navigation and may arrive with a different Accept-Language.
+    _oauth_language = negotiate_language(request.headers.get("accept-language"))
     return {"url": allegro.auth_url(_oauth_state)}
 
 
 @router.get("/auth/callback")
-async def auth_callback(code: str | None = None, state: str | None = None, error: str | None = None):
-    global _oauth_state, _oauth_state_deadline
+async def auth_callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+):
+    global _oauth_state, _oauth_state_deadline, _oauth_language
     if (
         not state
         or not _oauth_state
@@ -174,17 +225,23 @@ async def auth_callback(code: str | None = None, state: str | None = None, error
             state.encode("utf-8"), _oauth_state.encode("utf-8")
         )
     ):
-        raise HTTPException(status_code=400, detail="Nieprawidłowy lub wygasły stan autoryzacji.")
+        # No valid flow to take a language from: use this request's own header.
+        language = negotiate_language(request.headers.get("accept-language"))
+        return _oauth_error_page(language, t("oauth.invalid_state", lang=language))
+
+    # From here the flow is genuine: answer in the language it was started with.
+    language = _oauth_language
     _oauth_state = None
     _oauth_state_deadline = 0.0
+    _oauth_language = DEFAULT_LANGUAGE
     if error:
-        raise HTTPException(status_code=400, detail=f"Allegro odrzuciło autoryzację: {error}")
+        return _oauth_error_page(language, t("oauth.rejected", lang=language, error=error))
     if not code:
-        raise HTTPException(status_code=400, detail="Brak parametru 'code' w callbacku Allegro.")
+        return _oauth_error_page(language, t("oauth.missing_code", lang=language))
     try:
         await allegro.exchange_code(code)
     except allegro.AllegroError as exc:
         raise to_http_exception(exc)
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"Brak łączności z Allegro: {exc}")
+        raise HTTPException(status_code=502, detail=t("common.allegro_unreachable", error=exc))
     return RedirectResponse(f"{UI_BASE_URL}/")
