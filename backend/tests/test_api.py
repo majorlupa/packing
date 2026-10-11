@@ -709,7 +709,13 @@ def test_custom_doc_upload_rejects_non_pdf(client):
 
 
 def test_custom_doc_upload_and_delete(app_env, client):
-    files = {"file": ("doc.pdf", b"%PDF-1.4 minimal", "application/pdf")}
+    import io
+    from pypdf import PdfWriter
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=300)
+    output = io.BytesIO()
+    writer.write(output)
+    files = {"file": ("doc.pdf", output.getvalue(), "application/pdf")}
     assert client.post("/api/print/custom-doc", files=files).status_code == 200
     assert client.get("/api/print/custom-doc/info").json()["available"] is True
     assert client.get("/api/print/custom-doc").content.startswith(b"%PDF-")

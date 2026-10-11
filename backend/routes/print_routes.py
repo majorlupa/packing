@@ -2,8 +2,8 @@
 Print routes — return PDF/HTML content for the browser to trigger printing.
 Carrier label: PDF fetched from Allegro shipment management API.
 Sales document: HTML rendered via Jinja2 template, browser prints.
-Custom doc: user-uploaded static PDF, served as-is.
-Combined: invoice rendered to PDF via weasyprint, merged with custom doc via pypdf.
+Custom doc: selected static upload or structured template personalized for an order.
+Combined: invoice rendered to PDF via weasyprint, merged with selected custom doc via pypdf.
 """
 import asyncio
 import io
@@ -23,6 +23,7 @@ import store
 import api.allegro as allegro
 from api.allegro import to_http_exception
 from localization import current_language, date_format, t
+from routes.documents import active_template, has_content, personalized_pdf
 
 router = APIRouter(prefix="/print", tags=["print"])
 
@@ -275,36 +276,52 @@ async def print_invoice(order_id: str):
 
 
 @router.get("/orders/{order_id}/combined")
-async def print_combined(order_id: str):
-    """Invoice + custom doc merged into one PDF."""
+def print_combined(order_id: str):
+    """Invoice + selected custom doc merged into one PDF (render off the event loop)."""
     import weasyprint
     from pypdf import PdfWriter, PdfReader
 
     html = _build_invoice_html(order_id)
     invoice_pdf = weasyprint.HTML(string=html).write_pdf()
 
-    if not os.path.exists(CUSTOM_DOC_PATH):
-        return Response(content=invoice_pdf, media_type="application/pdf")
+    custom_pdf = selected_custom_pdf(order_id)
+    if custom_pdf is None:
+        return Response(content=invoice_pdf, media_type="application/pdf", headers={"Cache-Control": "no-store"})
 
     writer = PdfWriter()
     for page in PdfReader(io.BytesIO(invoice_pdf)).pages:
         writer.add_page(page)
-    for page in PdfReader(str(CUSTOM_DOC_PATH)).pages:
+    for page in PdfReader(io.BytesIO(custom_pdf)).pages:
         writer.add_page(page)
 
     out = io.BytesIO()
     writer.write(out)
-    return Response(content=out.getvalue(), media_type="application/pdf")
+    return Response(content=out.getvalue(), media_type="application/pdf", headers={"Cache-Control": "no-store"})
 
 
 # ---- Custom document ----
 
 
+def selected_custom_pdf(order_id: str | None = None) -> bytes | None:
+    settings = store.get_document_settings()
+    if settings["profiles"]["default"]["source"] == "template":
+        template = active_template(settings)
+        if not has_content(template):
+            return None
+        return personalized_pdf(template, order_id)
+    if not CUSTOM_DOC_PATH.exists():
+        return None
+    return CUSTOM_DOC_PATH.read_bytes()
+
+
 @router.get("/custom-doc/info")
 def custom_doc_info():
-    if os.path.exists(CUSTOM_DOC_PATH):
-        return {"available": True, "size": os.path.getsize(CUSTOM_DOC_PATH)}
-    return {"available": False}
+    settings = store.get_document_settings()
+    source = settings["profiles"]["default"]["source"]
+    uploaded = CUSTOM_DOC_PATH.exists()
+    available = uploaded if source == "upload" else has_content(active_template(settings))
+    return {"available": available, "source": source, "upload_available": uploaded,
+            "size": CUSTOM_DOC_PATH.stat().st_size if uploaded else None}
 
 
 @router.post("/custom-doc")
@@ -316,6 +333,15 @@ async def upload_custom_doc(file: UploadFile = File(...)):
         raise HTTPException(status_code=413, detail=t("print.file_too_large"))
     if not payload.startswith(b"%PDF-"):
         raise HTTPException(status_code=400, detail=t("print.not_a_pdf"))
+    from pypdf import PdfReader
+    try:
+        reader = PdfReader(io.BytesIO(payload))
+        if reader.is_encrypted or not reader.pages:
+            raise ValueError("Encrypted or empty PDF")
+        for page in reader.pages:
+            _ = page.mediabox
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=t("print.not_a_pdf")) from exc
     CUSTOM_DOC_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = CUSTOM_DOC_PATH.with_name(CUSTOM_DOC_PATH.name + ".tmp")
     with open(tmp, "wb") as handle:
@@ -327,12 +353,11 @@ async def upload_custom_doc(file: UploadFile = File(...)):
 
 
 @router.get("/custom-doc")
-def serve_custom_doc():
-    if not os.path.exists(CUSTOM_DOC_PATH):
+def serve_custom_doc(order_id: str | None = Query(None, min_length=1, max_length=200)):
+    content = selected_custom_pdf(order_id)
+    if content is None:
         raise HTTPException(status_code=404, detail=t("print.custom_doc_missing"))
-    with open(CUSTOM_DOC_PATH, "rb") as handle:
-        content = handle.read()
-    return Response(content=content, media_type="application/pdf")
+    return Response(content=content, media_type="application/pdf", headers={"Cache-Control": "no-store"})
 
 
 @router.delete("/custom-doc")

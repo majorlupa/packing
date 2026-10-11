@@ -267,3 +267,23 @@ test('empty pending list hides sample orders outside dry run', () => {
   assert.doesNotMatch(app.html(), /btn-seed-sample/);
   assert.doesNotMatch(app.html(), /Wczytaj zamówienia testowe/);
 });
+
+// ---- Custom document button ----
+// The packing view must print the selected custom document for the current
+// order, and stay disabled while the selected source is unavailable.
+
+test('custom document button is disabled until a source is available', () => {
+  const app = setup([locker('one', { delivery_type: 'courier', courier: 'Kurier InPost' })]);
+  assert.equal(app.view().querySelector('#btn-custom-doc').disabled, true);
+});
+
+test('custom document button prints the current order from the selected source', async () => {
+  const app = setup([locker('order-42', { delivery_type: 'courier', courier: 'Kurier InPost' })]);
+  const opened = [];
+  app.context.testOpenPdf = path => { opened.push(path); return Promise.resolve(); };
+  vm.runInContext('openPdf = testOpenPdf; state.customDocAvailable = true; renderPackingCard(document.getElementById("content"));', app.context);
+  const button = app.view().querySelector('#btn-custom-doc');
+  assert.equal(button.disabled, false);
+  await button.dispatch('click');
+  assert.deepEqual(opened, ['/print/custom-doc?order_id=order-42']);
+});

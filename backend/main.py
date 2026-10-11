@@ -21,6 +21,7 @@ from localization import current_language, negotiate_language, t
 from routes.orders import router as orders_router
 from routes.queue import router as queue_router
 from routes.print_routes import router as print_router
+from routes.documents import router as documents_router
 from routes.setup import router as setup_router, is_configured, requires_access_token
 
 logger = logging.getLogger("packing")
@@ -57,6 +58,15 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
             content={"detail": t("setup.invalid_credentials_bounded")},
             headers={"Cache-Control": "no-store"},
         )
+    if request.url.path in ("/api/print/document-settings", "/api/print/document-preview"):
+        # Do not echo a logo's base64 payload or operator-authored document text.
+        messages = []
+        for error in exc.errors():
+            cause = error.get("ctx", {}).get("error")
+            if isinstance(cause, ValueError):
+                messages.append(str(cause))
+        detail = "; ".join(dict.fromkeys(messages)) if messages else t("document.invalid_template")
+        return JSONResponse(status_code=422, content={"detail": detail}, headers={"Cache-Control": "no-store"})
     return await request_validation_exception_handler(request, exc)
 
 
@@ -74,6 +84,7 @@ api = APIRouter(prefix="/api")
 api.include_router(orders_router)
 api.include_router(queue_router)
 api.include_router(print_router)
+api.include_router(documents_router)
 api.include_router(setup_router)
 app.include_router(api)
 

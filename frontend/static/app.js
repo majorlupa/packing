@@ -98,6 +98,7 @@ const MESSAGES = {
     'packing.labelLocker': 'Etykieta Paczkomat',
     'packing.labelCourier': 'Etykieta kurierska',
     'packing.invoice': 'Dokument',
+    'packing.customDoc': 'Własny dokument',
     'packing.done': 'GOTOWE',
     'packing.generatingLabel': 'Generowanie etykiety…',
     'packing.doneConfirm': 'Etykieta nie wydrukowana — czy na pewno chcesz oznaczyć jako gotowe?',
@@ -136,6 +137,43 @@ const MESSAGES = {
     'settings.saved': 'Zapisano',
     'settings.error': 'Błąd',
     'err.docDelete': 'Nie udało się usunąć dokumentu',
+
+    'doc.source': 'Źródło dokumentu',
+    'doc.sourceUpload': 'Wgrany plik PDF',
+    'doc.sourceTemplate': 'Zaprojektowany szablon',
+    'doc.templateName': 'Nazwa szablonu',
+    'doc.blockHeading': 'Nagłówek',
+    'doc.blockType': 'Rodzaj bloku',
+    'doc.blockText': 'Tekst',
+    'doc.blockCustomer': 'Dane klienta',
+    'doc.blockItems': 'Tabela produktów',
+    'doc.blockLogo': 'Logo',
+    'doc.addBlock': 'Dodaj blok',
+    'doc.align': 'Wyrównanie',
+    'doc.alignLeft': 'Do lewej',
+    'doc.alignCenter': 'Do środka',
+    'doc.alignRight': 'Do prawej',
+    'doc.size': 'Rozmiar',
+    'doc.showPrices': 'Pokaż ceny',
+    'doc.insertField': 'Wstaw pole',
+    'doc.textLimit': 'Blok tekstu może mieć maksymalnie 4000 znaków.',
+    'doc.moveUp': 'W górę',
+    'doc.moveDown': 'W dół',
+    'doc.removeBlock': 'Usuń blok',
+    'doc.logoNone': 'Brak logo',
+    'doc.logoChosen': 'Logo wybrane',
+    'doc.preview': 'Podgląd',
+    'doc.previewOrder': 'Zamówienie do podglądu',
+    'doc.statusDirty': 'Niezapisane zmiany',
+    'doc.statusSaving': 'Zapisywanie…',
+    'doc.statusSaved': 'Zapisano',
+    'doc.statusError': 'Błąd: {detail}',
+    'doc.empty': 'Szablon jest pusty — dodaj przynajmniej jeden blok z treścią.',
+    'doc.previewNoOrders': 'Brak zamówień do podglądu. Dodaj zamówienia do pakowania, aby wyświetlić podgląd.',
+    'doc.logoSvg': 'Format SVG nie jest obsługiwany. Użyj pliku PNG lub JPEG.',
+    'doc.logoFormat': 'Nieobsługiwany format obrazu. Użyj pliku PNG lub JPEG.',
+    'doc.logoTooLarge': 'Logo jest za duże (maks. 2 MB).',
+    'doc.logoTotalTooLarge': 'Łączny rozmiar logotypów w szablonie jest za duży (maks. 2 MB).',
     'settings.shippingIntro': 'Dane nadawcy, odbiorcy i punktu odbioru pobieramy automatycznie z Allegro. Adres nadawcy ustaw w książce adresowej Wysyłam z Allegro.',
     'settings.defaultPackageHtml': '<strong>Domyślna paczka</strong> — wartości startowe w widoku pakowania.',
     'sh.length': 'Długość (cm)',
@@ -263,6 +301,7 @@ const MESSAGES = {
     'packing.labelLocker': 'Parcel locker label',
     'packing.labelCourier': 'Courier label',
     'packing.invoice': 'Document',
+    'packing.customDoc': 'Custom document',
     'packing.done': 'DONE',
     'packing.generatingLabel': 'Generating label…',
     'packing.doneConfirm': 'The label has not been printed — mark the order as done anyway?',
@@ -301,6 +340,43 @@ const MESSAGES = {
     'settings.saved': 'Saved',
     'settings.error': 'Error',
     'err.docDelete': 'Could not delete the document',
+
+    'doc.source': 'Document source',
+    'doc.sourceUpload': 'Uploaded PDF',
+    'doc.sourceTemplate': 'Designed template',
+    'doc.templateName': 'Template name',
+    'doc.blockHeading': 'Heading',
+    'doc.blockType': 'Block type',
+    'doc.blockText': 'Text',
+    'doc.blockCustomer': 'Customer details',
+    'doc.blockItems': 'Product table',
+    'doc.blockLogo': 'Logo',
+    'doc.addBlock': 'Add block',
+    'doc.align': 'Alignment',
+    'doc.alignLeft': 'Left',
+    'doc.alignCenter': 'Center',
+    'doc.alignRight': 'Right',
+    'doc.size': 'Size',
+    'doc.showPrices': 'Show prices',
+    'doc.insertField': 'Insert field',
+    'doc.textLimit': 'A text block can contain at most 4000 characters.',
+    'doc.moveUp': 'Move up',
+    'doc.moveDown': 'Move down',
+    'doc.removeBlock': 'Remove block',
+    'doc.logoNone': 'No logo',
+    'doc.logoChosen': 'Logo selected',
+    'doc.preview': 'Preview',
+    'doc.previewOrder': 'Preview order',
+    'doc.statusDirty': 'Unsaved changes',
+    'doc.statusSaving': 'Saving…',
+    'doc.statusSaved': 'Saved',
+    'doc.statusError': 'Error: {detail}',
+    'doc.empty': 'The template is empty — add at least one block with content.',
+    'doc.previewNoOrders': 'No orders to preview. Add orders to packing to see a preview.',
+    'doc.logoSvg': 'SVG is not supported. Use a PNG or JPEG file.',
+    'doc.logoFormat': 'Unsupported image format. Use a PNG or JPEG file.',
+    'doc.logoTooLarge': 'The logo is too large (max 2 MB).',
+    'doc.logoTotalTooLarge': 'The combined logo size in the template is too large (max 2 MB).',
     'settings.shippingIntro': 'Sender, recipient and pickup point details are read automatically from Allegro. Set the sender address in the "Wysyłam z Allegro" address book.',
     'settings.defaultPackageHtml': '<strong>Default parcel</strong> — starting values in the packing view.',
     'sh.length': 'Length (cm)',
@@ -629,14 +705,15 @@ function reportError(prefix, err) {
 }
 
 // PDFs are fetched first so a failure (401/502/404) shows up as a message instead of
-// a browser tab full of JSON.
-async function openPdf(path) {
+// a browser tab full of JSON. `options` lets callers POST a draft (document preview)
+// through the same popup-timing and error handling.
+async function openPdf(path, options = {}) {
   // Reserve the tab during the click; browsers block popups after a slow API call.
   const printTab = window.open('about:blank', '_blank');
   if (!printTab) throw new Error(t('print.popupBlocked'));
   printTab.opener = null;
   try {
-    const res = await apiFetch(path);
+    const res = await apiFetch(path, options);
     if (!res.ok) {
       let detail = `${res.status} ${res.statusText}`;
       try {
@@ -1169,6 +1246,7 @@ function renderPackingCard(el) {
       <div class="pack-buttons">
         <button class="btn btn-label" id="btn-label" ${lockerNeedsSize || pendingSize ? 'disabled' : ''}>${esc(labelButtonText(isLocker, Boolean(order.shipment_id), false))}</button>
         <button class="btn btn-invoice" id="btn-invoice">🖨 <span data-i18n="packing.invoice">${t('packing.invoice')}</span></button>
+        <button class="btn btn-custom-doc" id="btn-custom-doc" ${state.customDocAvailable ? '' : 'disabled'}>🖨 <span data-i18n="packing.customDoc">${t('packing.customDoc')}</span></button>
         <button class="btn btn-done" id="btn-done">✓ <span data-i18n="packing.done">${t('packing.done')}</span></button>
       </div>
     </div>
@@ -1287,6 +1365,14 @@ function renderPackingCard(el) {
   view.querySelector('#btn-invoice').addEventListener('click', async () => {
     try {
       await openPdf(`/print/orders/${order.id}/combined`);
+    } catch (err) {
+      reportError(t('err.document'), err);
+    }
+  });
+  view.querySelector('#btn-custom-doc').addEventListener('click', async () => {
+    try {
+      // Standalone custom document: the selected source for this one order.
+      await openPdf('/print/custom-doc?order_id=' + encodeURIComponent(order.id));
     } catch (err) {
       reportError(t('err.document'), err);
     }
@@ -1467,10 +1553,21 @@ async function renderSettingsShipping(panel) {
 }
 
 async function renderSettingsDocuments(panel) {
-  const [data, docInfo] = await Promise.all([
+  const [data, docInfo, docSettings] = await Promise.all([
     api('/print/invoice-settings'),
     api('/print/custom-doc/info'),
+    api('/print/document-settings'),
   ]);
+  // Keep the packing view's custom-document button in step with the selected source.
+  state.customDocAvailable = Boolean(docInfo.available);
+  const uploadAvailable = Boolean(docInfo.upload_available ?? docInfo.available);
+
+  async function refreshCustomDocAvailability() {
+    try {
+      const info = await api('/print/custom-doc/info');
+      state.customDocAvailable = Boolean(info && info.available);
+    } catch { /* keep the last known value */ }
+  }
 
   panel.innerHTML = `
     <div class="settings-section">
@@ -1496,23 +1593,27 @@ async function renderSettingsDocuments(panel) {
     </div>
 
     <div class="settings-section">
+      <div id="document-editor"></div>
+    </div>
+
+    <div class="settings-section">
       <p class="settings-desc" data-i18n="settings.customDocDesc">${t('settings.customDocDesc')}</p>
-      <div class="custom-doc-status ${docInfo.available ? 'available' : 'empty'}" id="custom-doc-status">
-        ${docInfo.available
+      <div class="custom-doc-status ${uploadAvailable ? 'available' : 'empty'}" id="custom-doc-status">
+        ${uploadAvailable
           ? `✓ <span data-i18n="settings.docUploaded">${t('settings.docUploaded')}</span><button class="btn btn-secondary btn-sm" id="btn-doc-delete" data-i18n="common.delete">${t('common.delete')}</button>`
           : `<span class="dim" data-i18n="settings.docNone">${t('settings.docNone')}</span>`
         }
       </div>
       <div class="settings-field" style="margin-top:12px">
         <input type="file" id="custom-doc-file" accept=".pdf" style="display:none">
-        <button class="btn btn-secondary" id="btn-doc-pick">${docInfo.available ? esc(t('settings.docReplace')) : esc(t('settings.docChoose'))}</button>
+        <button class="btn btn-secondary" id="btn-doc-pick">${uploadAvailable ? esc(t('settings.docReplace')) : esc(t('settings.docChoose'))}</button>
         <span id="custom-doc-filename" class="dim" style="margin-left:10px;font-size:13px"></span>
       </div>
       <p id="custom-doc-note" class="settings-note hidden"></p>
     </div>
   `;
 
-  panel.querySelector('#btn-doc-pick').setAttribute('data-i18n', docInfo.available ? 'settings.docReplace' : 'settings.docChoose');
+  panel.querySelector('#btn-doc-pick').setAttribute('data-i18n', uploadAvailable ? 'settings.docReplace' : 'settings.docChoose');
 
   panel.querySelector('#inv-free-text').addEventListener('input', function() {
     panel.querySelector('#inv-free-text-count').textContent = `${this.value.length} / 160`;
@@ -1560,7 +1661,7 @@ async function renderSettingsDocuments(panel) {
       return;
     }
     if (res.ok) {
-      state.customDocAvailable = true;
+      await refreshCustomDocAvailability();
       showNote(note, () => '✓ ' + t('settings.docUploadedOk'));
       panel.querySelector('#custom-doc-status').outerHTML =
         `<div class="custom-doc-status available" id="custom-doc-status">✓ <span data-i18n="settings.docUploaded">${t('settings.docUploaded')}</span><button class="btn btn-secondary btn-sm" id="btn-doc-delete" data-i18n="common.delete">${t('common.delete')}</button></div>`;
@@ -1584,7 +1685,7 @@ async function renderSettingsDocuments(panel) {
         reportError(t('err.docDelete'), err);
         return;
       }
-      state.customDocAvailable = false;
+      await refreshCustomDocAvailability();
       p.querySelector('#custom-doc-status').outerHTML =
         `<div class="custom-doc-status empty" id="custom-doc-status"><span class="dim" data-i18n="settings.docNone">${t('settings.docNone')}</span></div>`;
       setText(p.querySelector('#btn-doc-pick'), 'settings.docChoose');
@@ -1593,6 +1694,16 @@ async function renderSettingsDocuments(panel) {
     });
   }
   attachDeleteHandler(panel);
+
+  // Below the unchanged invoice controls: the block editor edits the single
+  // active template and selects which source is printed.
+  if (typeof DocumentEditor !== 'undefined') {
+    DocumentEditor.mount(panel.querySelector('#document-editor'), {
+      settings: docSettings,
+      orders: state.orders,
+      onSaved: refreshCustomDocAvailability,
+    });
+  }
 }
 
 async function renderSettingsArchive(panel) {

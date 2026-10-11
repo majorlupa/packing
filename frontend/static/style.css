@@ -531,3 +531,41 @@ body {
 .lang-select:focus-visible { outline: 2px solid var(--accent2); outline-offset: 2px; }
 .setup-card .lang-switch { justify-content: flex-end; margin: 0 0 8px 0; }
 #sidebar .lang-switch { margin-top: auto; padding-top: 12px; }
+
+/* ---- Custom document block editor ---- */
+.document-editor { display: flex; flex-direction: column; gap: 16px; }
+.editor-source { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.editor-label { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); }
+.editor-source-option { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 14px; }
+.editor-template { display: flex; flex-direction: column; gap: 10px; }
+.editor-template-name { padding: 8px 10px; border-radius: var(--radius); border: 1px solid #555; background: var(--bg); color: var(--text); font-size: 14px; max-width: 340px; }
+.editor-blocks { display: flex; flex-direction: column; gap: 12px; }
+.editor-block { border: 1px solid #333; border-radius: var(--radius); background: var(--surface); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.editor-block-head { display: flex; align-items: center; gap: 8px; }
+.editor-block-title { font-size: 13px; font-weight: 600; color: var(--text); flex: 1; }
+.editor-block-head button { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 15px; padding: 2px 6px; border-radius: 4px; }
+.editor-block-head button:disabled { opacity: 0.3; cursor: default; }
+.editor-block-head button:not(:disabled):hover { background: var(--surface2); color: var(--text); }
+.editor-block-text { width: 100%; min-height: 60px; padding: 8px 10px; border-radius: var(--radius); border: 1px solid #555; background: var(--bg); color: var(--text); font-size: 13px; font-family: inherit; box-sizing: border-box; resize: vertical; }
+.editor-block-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.editor-block-row select, .editor-block-size { padding: 5px 8px; border-radius: var(--radius); border: 1px solid #555; background: var(--bg); color: var(--text); font-size: 13px; }
+.editor-block-size { width: 64px; }
+.editor-tokens { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.editor-token { background: var(--surface2); border: 1px solid #444; color: var(--text-dim); border-radius: 4px; padding: 3px 7px; font-size: 12px; font-family: monospace; cursor: pointer; }
+.editor-token:hover { color: var(--text); border-color: #666; }
+.editor-block-prices-label { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }
+.editor-logo-file { color: var(--text-dim); font-size: 13px; }
+.editor-logo-preview { max-height: 60px; max-width: 160px; background: #fff; border-radius: 4px; }
+.editor-logo-name { font-size: 12px; color: var(--text-dim); }
+.editor-add { display: flex; align-items: center; gap: 8px; }
+.editor-add select, .editor-preview-order { padding: 6px 8px; border-radius: var(--radius); border: 1px solid #555; background: var(--bg); color: var(--text); font-size: 13px; max-width: 100%; }
+.editor-add button { padding: 6px 12px; border-radius: var(--radius); border: 1px solid #555; background: var(--surface2); color: var(--text); font-size: 13px; cursor: pointer; }
+.editor-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.editor-actions button { padding: 7px 14px; border-radius: var(--radius); border: none; cursor: pointer; font-size: 13px; }
+.editor-save { background: var(--accent2); color: #06231b; }
+.editor-save:disabled, .editor-preview:disabled { opacity: 0.5; cursor: default; }
+.editor-preview { background: var(--surface2); color: var(--text); border: 1px solid #555 !important; }
+.editor-status { font-size: 13px; color: var(--text-dim); }
+.editor-preview-note { font-size: 13px; color: var(--accent); }
+.btn-custom-doc { background: var(--surface2); color: var(--text); }
+.btn-custom-doc:disabled { opacity: 0.5; cursor: default; }

@@ -102,6 +102,25 @@ trybie; endpoint `POST /api/orders/seed-mock` poza nim zwraca 409. Zamówienia t
 mają fikcyjne identyfikatory Allegro i nie można ich wysłać — nie powinny trafiać
 do rzeczywistej kolejki, gdzie mogłyby wyglądać jak opłacone zamówienia.
 
+### Własny dokument dla klienta
+
+W **Ustawienia → Dokumenty** wybierz wgrany PDF lub szablon zaprojektowany w aplikacji.
+Wgrany PDF pozostaje niezmienny. Szablon może zawierać logo PNG/JPEG (maks. 2 MB),
+nagłówki, tekst, dane klienta i tabelę produktów. Bloki można przestawiać, a pola
+osobowe wstawiać przyciskami: `{{buyer_name}}`, `{{buyer_address}}`, `{{order_number}}`,
+`{{date}}`, `{{courier}}`, `{{pickup_point}}`, `{{tracking_number}}`.
+
+Podgląd PDF wykorzystuje wybrane istniejące zamówienie i niezapisane zmiany; nie zapisuje
+szablonu ani nie tworzy przesyłki. Numer nadania jest dostępny dopiero po jego zapisaniu
+przy tworzeniu etykiety; brakujące dane opcjonalne pojawiają się jako „—”. Zapisz szablon
+i wybór źródła przed drukowaniem podczas pakowania. Własny dokument można wydrukować
+oddzielnie lub razem z dokumentem sprzedażowym. Dokument sprzedażowy pozostaje bez zmian.
+
+Przełączenie źródła zachowuje zarówno szablon, jak i wgrany plik. Ustawienia są trwałe;
+pierwsza wersja udostępnia jeden szablon, a struktura danych pozostawia miejsce na kolejne.
+Obsługa wielu kont Allegro nie jest jeszcze dostępna. Wgrany PDF musi być czytelny,
+niezaszyfrowany i mieć co najmniej jedną stronę (maks. 20 MB).
+
 ### Konfiguracja
 
 Wszystkie ustawienia znajdują się w `.env`; wymagane są tylko dane dostępowe Allegro
@@ -237,6 +256,25 @@ sample orders so the workflow can be walked through with an empty queue. That bu
 its endpoint `POST /api/orders/seed-mock` exist only in dry run: the API answers 409
 otherwise, because those orders carry invented Allegro ids that cannot be shipped and
 would sit in a real queue looking like paid ones.
+
+### Custom customer document
+
+In **Settings → Documents**, choose an uploaded PDF or a template designed in the app.
+Uploaded PDFs stay unchanged. Templates support a PNG/JPEG logo (max. 2 MB), headings,
+text, customer details and a product table. Reorder blocks and insert dynamic fields
+using buttons: `{{buyer_name}}`, `{{buyer_address}}`, `{{order_number}}`, `{{date}}`,
+`{{courier}}`, `{{pickup_point}}` and `{{tracking_number}}`.
+
+PDF preview uses a selected existing order and unsaved edits without saving the template
+or creating a shipment. Tracking is available only once label creation has saved it;
+missing optional values appear as “—”. Save the template and source choice before
+printing while packing. Print the custom document separately or combined with the
+unchanged sales document.
+
+Switching sources preserves both the template and uploaded file. Settings survive
+restarts. The first version exposes one template but stores a collection for future
+expansion; multiple Allegro accounts are not supported yet. Uploaded PDFs must be
+readable, unencrypted and contain at least one page (max. 20 MB).
 
 ### Configuration
 

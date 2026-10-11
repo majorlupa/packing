@@ -8,6 +8,9 @@ const vm = require('node:vm');
 const test = require('node:test');
 
 const source = fs.readFileSync('frontend/static/app.js', 'utf8');
+// The block editor keeps its catalog keys in app.js; scan it too so a missing
+// label in one language is caught.
+const editorSource = fs.readFileSync('frontend/static/document-editor.js', 'utf8');
 const definitions = source.slice(0, source.indexOf('// ---- Sidebar events ----'));
 
 function fakeStorage(initial = {}, options = {}) {
@@ -234,6 +237,7 @@ test('every translation key referenced by the markup and scripts exists in the c
   };
   add(html);
   add(source);
+  add(editorSource);
   assert.ok(keys.size > 50, 'the scan should find the catalog usages');
   const missing = [];
   for (const key of keys) {

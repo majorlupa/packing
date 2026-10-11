@@ -275,6 +275,21 @@ test('setup status messages follow the language but raw errors stay verbatim', (
 
 // ---- Settings notes ----
 
+test('upload controls reflect the file, not active template availability', async () => {
+  const panel = new El();
+  const context = loadContext({ document: makeDocument(new Map()) });
+  context.api = async path => {
+    if (path === '/print/invoice-settings') return { free_text: '' };
+    if (path === '/print/custom-doc/info') return { available: true, source: 'template', upload_available: false };
+    if (path === '/print/document-settings') return {};
+    throw new Error(path);
+  };
+  await context.renderSettingsDocuments(panel);
+  assert.doesNotMatch(panel.innerHTML, /id="btn-doc-delete"/, 'no uploaded PDF exists to delete');
+  assert.match(panel.innerHTML, /data-i18n="settings.docNone"/);
+  assert.equal(panel.querySelector('#btn-doc-pick').getAttribute('data-i18n'), 'settings.docChoose');
+});
+
 function settingsContext() {
   const panel = new El();
   const context = loadContext({ document: makeDocument(new Map()) });

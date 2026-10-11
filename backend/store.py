@@ -23,6 +23,7 @@ from pydantic import ValidationError
 
 from localization import t
 from models.order import Order, PickingList
+from documents import DocumentSettings, default_document_settings
 
 DATA_DIR = Path(os.getenv("PACKING_DATA_DIR", "/app/data"))
 DATA_FILE = DATA_DIR / "state.json"
@@ -83,6 +84,7 @@ def _default_state() -> dict:
         "picking_list_counter": 0,
         "invoice_settings": deepcopy(DEFAULT_INVOICE_SETTINGS),
         "shipment_settings": deepcopy(DEFAULT_SHIPMENT_SETTINGS),
+        "document_settings": default_document_settings(),
         "archive": [],
         "quarantine": [],
     }
@@ -155,6 +157,12 @@ def _normalise(raw: object) -> dict:
 
     state["invoice_settings"] = _merged(DEFAULT_INVOICE_SETTINGS, raw.get("invoice_settings"))
     state["shipment_settings"] = _merged(DEFAULT_SHIPMENT_SETTINGS, raw.get("shipment_settings"))
+    if "document_settings" in raw:
+        try:
+            state["document_settings"] = DocumentSettings.model_validate(raw["document_settings"]).model_dump()
+        except ValidationError as exc:
+            quarantine.append({"kind": "document-settings", "id": "document_settings",
+                               "error": str(exc)[:500], "record": raw["document_settings"]})
     state["quarantine"] = quarantine[:_MAX_QUARANTINE]
 
     state["_status"] = {
@@ -374,5 +382,19 @@ def get_shipment_settings() -> dict:
 def save_shipment_settings(settings: dict) -> None:
     def mutate(state):
         state["shipment_settings"] = _merged(DEFAULT_SHIPMENT_SETTINGS, settings)
+
+    transact(mutate)
+
+
+def get_document_settings() -> dict:
+    with _LOCK:
+        return deepcopy(_load()["document_settings"])
+
+
+def save_document_settings(settings: dict) -> None:
+    validated = DocumentSettings.model_validate(settings).model_dump()
+
+    def mutate(state):
+        state["document_settings"] = validated
 
     transact(mutate)
