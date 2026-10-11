@@ -88,6 +88,26 @@ test('document editor saves locally and previews an unsaved personalized demo PD
   assert.equal((await demo().read('/print/document-settings')).templates[0].blocks.length, 0);
 });
 
+test('custom demo PDFs contain only template blocks, not inherited order content', async () => {
+  const {api, send} = demo();
+  const template = {id:'default',name:'Only my content',blocks:[{type:'text',text:'CUSTOM ONLY {{buyer_name}}'}]};
+  await send('/print/document-settings', {source:'template',template});
+  for (const [path,options] of [
+    ['/print/custom-doc?order_id=demo-101',{}],
+    ['/print/document-preview',{method:'POST',body:JSON.stringify({order_id:'demo-101',template})}]
+  ]) {
+    const pdf = await (await api.request(path,options)).text();
+    assert.match(pdf, /CUSTOM ONLY Anna Demo/);
+    assert.doesNotMatch(pdf, /SAMPLE ORDER DOCUMENT|Kubek ceramiczny|DEMO-101/);
+    assert.match(pdf, /WELES \/ DEMO/);
+  }
+  const sales = await api.request('/print/orders/demo-101/document');
+  assert.equal(sales.ok, true);
+  const pdf = await sales.text();
+  assert.match(pdf, /SAMPLE ORDER DOCUMENT/);
+  assert.doesNotMatch(pdf, /CUSTOM ONLY/);
+});
+
 test('demo build includes every referenced local script including the editor', () => {
   require('node:child_process').execFileSync(process.execPath, ['tools/build-demo.cjs']);
   const html = fs.readFileSync('dist/index.html','utf8');

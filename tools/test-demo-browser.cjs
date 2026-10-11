@@ -52,6 +52,7 @@ const server = http.createServer((req, res) => {
       method:'POST',body:JSON.stringify({order_id:'demo-102',template:{blocks:DocumentEditor.draft.blocks}})
     })).text());
     assert.match(previewText, /Hello Marek Demo - DEMO-102/);
+    assert.doesNotMatch(previewText, /SAMPLE ORDER DOCUMENT|Kubek ceramiczny/);
     await page.locator('.editor-save').click();
     await page.waitForFunction(() => DocumentEditor.draft.status === 'saved');
     assert.equal(await page.evaluate(async () => (await (await WelesDemo.request('/print/custom-doc/info')).json()).available), true);
@@ -64,6 +65,16 @@ const server = http.createServer((req, res) => {
     assert.equal(await page.locator('#count-picking').innerText(), '1', 'same product in another delivery category stays pending');
     await page.locator('.btn-start-pack').first().click();
     await page.locator('#btn-label').waitFor();
+    assert.equal(await page.locator('#btn-document').count(), 1);
+    assert.equal(await page.locator('#btn-invoice, #btn-custom-doc').count(), 0);
+    assert.match(await page.locator('#btn-document').innerText(), /Własny dokument/);
+    const customPopupReady = page.waitForEvent('popup');
+    await page.locator('#btn-document').click();
+    const customPopup = await customPopupReady;
+    await customPopup.close();
+    await page.evaluate(() => setLanguage('en'));
+    assert.match(await page.locator('#btn-document').innerText(), /Custom document/);
+    await page.evaluate(() => setLanguage('pl'));
     assert.match(await page.locator('#demo-step').innerText(), /3 \/ 5/);
     const popupReady = page.waitForEvent('popup');
     await page.locator('#btn-label').click();
@@ -97,6 +108,11 @@ const server = http.createServer((req, res) => {
     await page.locator('#btn-create-pl').click();
     await page.locator('.btn-start-pack').first().click();
     await page.locator('#btn-label').waitFor();
+    assert.match(await page.locator('#btn-document').innerText(), /Dokument/);
+    const salesPopupReady = page.waitForEvent('popup');
+    await page.locator('#btn-document').click();
+    const salesPopup = await salesPopupReady;
+    await salesPopup.close();
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile packing must not overflow');
     // Exercise the separate locker category on mobile, then retain the choice across navigation.
     await page.locator('#demo-reset').click();

@@ -59,11 +59,12 @@
       return String(block.text || '').replace(/\{\{([^{}]+)\}\}/g, (_, key) => fields[key] ?? '-').split('\n');
     })];
   }
-  function samplePdf(order, label, extra = []) {
-    const lines = ['WELES / DEMO', label ? 'SAMPLE SHIPPING LABEL' : 'SAMPLE ORDER DOCUMENT',
-      'NOT VALID FOR SHIPPING OR ACCOUNTING', order.allegro_id,
+  function samplePdf(order, label, extra = [], customOnly = false) {
+    const orderLines = customOnly ? [] : [order.allegro_id,
       ...(order.delivery_type === 'inpost_locker' ? [`PACZKOMAT INPOST - SIZE ${order.parcel_size}`] : []),
-      ...order.items.map(item => `${item.quantity} x ${item.name}`), ...extra];
+      ...order.items.map(item => `${item.quantity} x ${item.name}`)];
+    const lines = ['WELES / DEMO', label ? 'SAMPLE SHIPPING LABEL' : customOnly ? 'SAMPLE CUSTOM DOCUMENT' : 'SAMPLE ORDER DOCUMENT',
+      'NOT VALID FOR SHIPPING OR ACCOUNTING', ...orderLines, ...extra];
     const safe = value => value.normalize('NFKD').replace(/[^\x20-\x7E]/g, '?').replace(/[\\()]/g, '\\$&');
     const stream = `BT /F1 15 Tf 40 780 Td ${lines.map((line, i) => `${i ? '0 -30 Td ' : ''}(${safe(line)}) Tj`).join('\n')} ET`;
     const objects = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
@@ -105,7 +106,7 @@
       if (route === '/print/custom-doc' && !customAvailable) return json({detail:'Wybierz i zapisz szablon dokumentu.'}, 404);
       const template = route === '/print/document-preview' ? body.template : documents.templates[0];
       if (!Array.isArray(template?.blocks) || !template.blocks.length) return json({detail:'Szablon jest pusty.'}, 422);
-      return samplePdf(order, false, templateLines(order, template));
+      return samplePdf(order, false, templateLines(order, template), true);
     }
     if (route === '/print/custom-doc' || route === '/print/custom-doc/upload') {
       return json({ detail: 'W demo pliki nie są przesyłane. Wypróbuj przykładowy dokument w widoku Pakowanie.' }, 400);
@@ -168,7 +169,7 @@
       order.status = { done: 'done', 'undo-done': 'packing', 'revert-pending': 'pending' }[action];
       if (action === 'revert-pending') { order.picking_list_id = null; detach(id); }
       response = json({ status: order.status });
-    } else if (/^\/print\/orders\/[^/]+\/(label|combined|invoice)$/.test(route) || /^\/print\/combined\/[^/]+$/.test(route)) {
+    } else if (/^\/print\/orders\/[^/]+\/(label|combined|invoice|document)$/.test(route) || /^\/print\/combined\/[^/]+$/.test(route)) {
       const parts = route.split('/');
       const [id,type] = parts[2] === 'combined' ? [parts[3],'combined'] : [parts[3],parts[4]];
       const order = orders.find(entry => entry.id === id);
