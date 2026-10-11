@@ -268,13 +268,18 @@ test('empty pending list hides sample orders outside dry run', () => {
   assert.doesNotMatch(app.html(), /Wczytaj zamówienia testowe/);
 });
 
-// ---- Custom document button ----
-// The packing view must print the selected custom document for the current
-// order, and stay disabled while the selected source is unavailable.
+// ---- Single document button ----
 
-test('custom document button is disabled until a source is available', () => {
+test('packing offers one sales-document action when no custom source is available', async () => {
   const app = setup([locker('one', { delivery_type: 'courier', courier: 'Kurier InPost' })]);
-  assert.equal(app.view().querySelector('#btn-custom-doc').disabled, true);
+  const opened = [];
+  app.context.testOpenPdf = path => { opened.push(path); return Promise.resolve(); };
+  vm.runInContext('openPdf = testOpenPdf;', app.context);
+  assert.equal((app.view().innerHTML.match(/id="btn-document"/g) || []).length, 1);
+  assert.doesNotMatch(app.view().innerHTML, /id="btn-(invoice|custom-doc)"/);
+  assert.match(app.view().innerHTML, /data-i18n="packing.invoice"/);
+  await app.view().querySelector('#btn-document').dispatch('click');
+  assert.deepEqual(opened, ['/print/orders/one/document']);
 });
 
 test('custom document button prints the current order from the selected source', async () => {
@@ -282,7 +287,9 @@ test('custom document button prints the current order from the selected source',
   const opened = [];
   app.context.testOpenPdf = path => { opened.push(path); return Promise.resolve(); };
   vm.runInContext('openPdf = testOpenPdf; state.customDocAvailable = true; renderPackingCard(document.getElementById("content"));', app.context);
-  const button = app.view().querySelector('#btn-custom-doc');
+  assert.doesNotMatch(app.view().innerHTML, /id="btn-(invoice|custom-doc)"/);
+  assert.match(app.view().innerHTML, /data-i18n="packing.customDoc"/);
+  const button = app.view().querySelector('#btn-document');
   assert.equal(button.disabled, false);
   await button.dispatch('click');
   assert.deepEqual(opened, ['/print/custom-doc?order_id=order-42']);
