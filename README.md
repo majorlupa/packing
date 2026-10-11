@@ -113,8 +113,10 @@ osobowe wstawiać przyciskami: `{{buyer_name}}`, `{{buyer_address}}`, `{{order_n
 Podgląd PDF wykorzystuje wybrane istniejące zamówienie i niezapisane zmiany; nie zapisuje
 szablonu ani nie tworzy przesyłki. Numer nadania jest dostępny dopiero po jego zapisaniu
 przy tworzeniu etykiety; brakujące dane opcjonalne pojawiają się jako „—”. Zapisz szablon
-i wybór źródła przed drukowaniem podczas pakowania. Własny dokument można wydrukować
-oddzielnie lub razem z dokumentem sprzedażowym. Dokument sprzedażowy pozostaje bez zmian.
+i wybór źródła przed drukowaniem podczas pakowania. W Pakowaniu jest jeden przycisk:
+**Własny dokument**, gdy wybrane źródło jest dostępne, albo **Dokument** dla dokumentu
+sprzedażowego. Drukowana jest tylko jedna wersja, bez łączenia obu dokumentów.
+Dokument sprzedażowy pozostaje bez zmian.
 
 Przełączenie źródła zachowuje zarówno szablon, jak i wgrany plik. Ustawienia są trwałe;
 pierwsza wersja udostępnia jeden szablon, a struktura danych pozostawia miejsce na kolejne.
@@ -169,8 +171,8 @@ etykiet w sandboxie. Sprawdź etykietę przed przekazaniem paczki kurierowi.
 
 Self-hosted order packing desk for Allegro sellers. One Docker service replaces
 the spreadsheet-and-printer routine: orders are synced from Allegro, batched into
-picking lists, packed, and finished with a real shipment label and a combined
-sales/custom document PDF.
+picking lists, packed, and finished with a real shipment label and either a
+sales document or a custom customer PDF.
 
 No SaaS, no per-seat fees — your orders stay on your machine and only talk to Allegro's API.
 
@@ -268,8 +270,9 @@ using buttons: `{{buyer_name}}`, `{{buyer_address}}`, `{{order_number}}`, `{{dat
 PDF preview uses a selected existing order and unsaved edits without saving the template
 or creating a shipment. Tracking is available only once label creation has saved it;
 missing optional values appear as “—”. Save the template and source choice before
-printing while packing. Print the custom document separately or combined with the
-unchanged sales document.
+printing while packing. Packing shows one button: **Custom document** when the selected
+source is available, otherwise **Document** for the sales document. It prints only
+that document, never both combined. The sales document remains unchanged.
 
 Switching sources preserves both the template and uploaded file. Settings survive
 restarts. The first version exposes one template but stores a collection for future

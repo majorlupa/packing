@@ -1245,8 +1245,7 @@ function renderPackingCard(el) {
       <p id="parcel-size-status" class="parcel-size-note" role="status" aria-live="polite">${esc(parcelSizeStatusText(order))}</p>
       <div class="pack-buttons">
         <button class="btn btn-label" id="btn-label" ${lockerNeedsSize || pendingSize ? 'disabled' : ''}>${esc(labelButtonText(isLocker, Boolean(order.shipment_id), false))}</button>
-        <button class="btn btn-invoice" id="btn-invoice">🖨 <span data-i18n="packing.invoice">${t('packing.invoice')}</span></button>
-        <button class="btn btn-custom-doc" id="btn-custom-doc" ${state.customDocAvailable ? '' : 'disabled'}>🖨 <span data-i18n="packing.customDoc">${t('packing.customDoc')}</span></button>
+        <button class="btn btn-invoice" id="btn-document">🖨 <span data-i18n="${state.customDocAvailable ? 'packing.customDoc' : 'packing.invoice'}">${t(state.customDocAvailable ? 'packing.customDoc' : 'packing.invoice')}</span></button>
         <button class="btn btn-done" id="btn-done">✓ <span data-i18n="packing.done">${t('packing.done')}</span></button>
       </div>
     </div>
@@ -1362,17 +1361,13 @@ function renderPackingCard(el) {
       btn.disabled = false;
     }
   });
-  view.querySelector('#btn-invoice').addEventListener('click', async () => {
+  const documentPath = state.customDocAvailable
+    ? '/print/custom-doc?order_id=' + encodeURIComponent(order.id)
+    : `/print/orders/${order.id}/document`;
+  view.querySelector('#btn-document').addEventListener('click', async () => {
     try {
-      await openPdf(`/print/orders/${order.id}/combined`);
-    } catch (err) {
-      reportError(t('err.document'), err);
-    }
-  });
-  view.querySelector('#btn-custom-doc').addEventListener('click', async () => {
-    try {
-      // Standalone custom document: the selected source for this one order.
-      await openPdf('/print/custom-doc?order_id=' + encodeURIComponent(order.id));
+      // One source only: never append the other document in the packing view.
+      await openPdf(documentPath);
     } catch (err) {
       reportError(t('err.document'), err);
     }

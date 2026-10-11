@@ -81,6 +81,18 @@ def test_settings_save_preview_and_personalized_print(app_env, client):
     assert client.get('/api/print/custom-doc?order_id=missing').status_code == 404
 
 
+def test_standalone_sales_pdf_never_appends_selected_custom_document(app_env, client):
+    app_env.write_state(app_env.default_state({'o-1': sample_order()}))
+    draft = template({'type': 'text', 'text': 'CUSTOM INSERT ONLY'})
+    assert client.post('/api/print/document-settings', json={'source': 'template', 'template': draft}).status_code == 200
+    response = client.get('/api/print/orders/o-1/document')
+    text = pdf_text(response)
+    assert 'CUSTOM INSERT ONLY' not in text
+    assert 'Wiertarka' in text
+    assert response.headers['cache-control'] == 'no-store'
+    assert client.get('/api/print/orders/missing/document').status_code == 404
+
+
 def test_mode_switch_preserves_upload_and_other_templates(app_env, client):
     app_env.write_state(app_env.default_state({'o-1': sample_order()}))
     writer = PdfWriter()

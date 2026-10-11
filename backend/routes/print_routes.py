@@ -275,6 +275,16 @@ async def print_invoice(order_id: str):
     return Response(content=html, media_type="text/html")
 
 
+@router.get("/orders/{order_id}/document")
+def print_sales_document(order_id: str):
+    """Standalone sales PDF, independent of the selected custom source."""
+    import weasyprint
+
+    html = _build_invoice_html(order_id)
+    pdf = weasyprint.HTML(string=html).write_pdf()
+    return Response(content=pdf, media_type="application/pdf", headers={"Cache-Control": "no-store"})
+
+
 @router.get("/orders/{order_id}/combined")
 def print_combined(order_id: str):
     """Invoice + selected custom doc merged into one PDF (render off the event loop)."""
