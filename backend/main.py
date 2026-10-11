@@ -1,4 +1,5 @@
 import hmac
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -16,9 +17,11 @@ import configuration
 configuration.load_environment()
 
 import store
+from localization import current_language, negotiate_language, t
 from routes.orders import router as orders_router
 from routes.queue import router as queue_router
 from routes.print_routes import router as print_router
+from routes.documents import router as documents_router
 from routes.setup import router as setup_router, is_configured, requires_access_token
 
 logger = logging.getLogger("packing")
@@ -52,9 +55,18 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
         # echo a client secret, even when that input fails validation.
         return JSONResponse(
             status_code=422,
-            content={"detail": "Podaj poprawny Client ID i Client Secret (bez spacji i nowych linii, maksymalnie 4096 znaków)."},
+            content={"detail": t("setup.invalid_credentials_bounded")},
             headers={"Cache-Control": "no-store"},
         )
+    if request.url.path in ("/api/print/document-settings", "/api/print/document-preview"):
+        # Do not echo a logo's base64 payload or operator-authored document text.
+        messages = []
+        for error in exc.errors():
+            cause = error.get("ctx", {}).get("error")
+            if isinstance(cause, ValueError):
+                messages.append(str(cause))
+        detail = "; ".join(dict.fromkeys(messages)) if messages else t("document.invalid_template")
+        return JSONResponse(status_code=422, content={"detail": detail}, headers={"Cache-Control": "no-store"})
     return await request_validation_exception_handler(request, exc)
 
 
@@ -72,6 +84,7 @@ api = APIRouter(prefix="/api")
 api.include_router(orders_router)
 api.include_router(queue_router)
 api.include_router(print_router)
+api.include_router(documents_router)
 api.include_router(setup_router)
 app.include_router(api)
 
@@ -97,7 +110,7 @@ async def require_api_token(request: Request, call_next):
     if len(expected) < 32:
         return JSONResponse(
             status_code=503,
-            content={"detail": "PACKING_ACCESS_TOKEN must be configured with at least 32 characters."},
+            content={"detail": t("auth.token_not_configured")},
         )
 
     authorization = request.headers.get("authorization", "")
@@ -107,7 +120,7 @@ async def require_api_token(request: Request, call_next):
     ):
         return Response(
             status_code=401,
-            content='{"detail":"Authentication required."}',
+            content=json.dumps({"detail": t("auth.required")}),
             media_type="application/json",
             headers={
                 "WWW-Authenticate": "Bearer",
@@ -127,6 +140,22 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["X-Packing-Auth-Required"],
 )
+
+
+@app.middleware("http")
+async def use_request_language(request: Request, call_next):
+    """Negotiate pl/en once per request and keep it request-scoped.
+
+    Registered last, so this wraps the CORS and auth middleware, the exception
+    handlers and every route. The ContextVar is copied into the downstream task,
+    so concurrent requests with different headers never share a language.
+    """
+    token = current_language.set(negotiate_language(request.headers.get("accept-language")))
+    try:
+        return await call_next(request)
+    finally:
+        current_language.reset(token)
+
 
 # In the single-container image the backend serves the built-in static UI.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent

@@ -10,11 +10,15 @@ The guide can be skipped, reopened, or restarted from the header. Sample PDFs ar
 watermarked and are not valid shipping labels or accounting documents.
 The Paczkomat InPost category uses per-order A/B/C parcel choices instead of
 dimensions and weight. Choices survive queue navigation within the demo session
-and appear on sample PDFs; changing the size invalidates the previous sample
-label. The demo stores `delivery_type: inpost_locker` and `parcel_size` for a future
-API integration. Live carrier integration is not implemented.
+and appear on sample PDFs. Once a label exists, its parcel size is locked, matching
+the full application's behavior. Demo labels remain fictional; the full application
+submits parcel sizes to Allegro.
 
 Custom PDF uploads are unavailable in the demo and show an explanatory message.
+The customer-document block editor saves its template in browser memory and previews
+personalized sample PDFs without a backend. Demo PDFs are deliberately simplified:
+text only, ASCII transliteration, without logo rendering or block formatting. The
+full application uses the production PDF renderer with logos and formatting.
 The Allegro authorization/reconnect button is hidden because the demo has no
 Allegro connection. The shared app keeps that button available for real accounts.
 

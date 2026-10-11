@@ -10,6 +10,7 @@ sadas.txt
 .claude/
 /api.md
 /shipment.md
-
 # Generated public demo
-dist/
+/dist/
+/CLAUDE.md
+/FINDINGS.md

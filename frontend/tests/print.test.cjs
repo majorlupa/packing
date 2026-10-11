@@ -3,7 +3,14 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const test = require('node:test');
 const source = fs.readFileSync('frontend/static/app.js', 'utf8');
-const functionSource = source.slice(source.indexOf('async function openPdf('), source.indexOf('\nlet state ='));
+// openPdf now reports its blocked-popup error through the translation catalog,
+// so run it together with the real catalog + helpers rather than a stub.
+const catalogSource = source.slice(
+  source.indexOf('// ---- i18n catalog ----'),
+  source.indexOf('async function promptForAccessToken'),
+);
+const openPdfSource = source.slice(source.indexOf('async function openPdf('), source.indexOf('\nlet state ='));
+const functionSource = `${catalogSource}\n${openPdfSource}`;
 
 function setup(response, blocked = false) {
   const calls = [];

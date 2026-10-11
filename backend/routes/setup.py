@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, SecretStr, field_validator
 
 import api.allegro as allegro
 import configuration
+from localization import t
 
 router = APIRouter(prefix="/setup", tags=["setup"])
 logger = logging.getLogger("packing.setup")
@@ -30,7 +31,7 @@ class SetupCredentials(BaseModel):
         text = value.get_secret_value() if isinstance(value, SecretStr) else value
         text = text.strip()
         if not text or len(text) > 4096 or any(ord(char) < 33 or ord(char) > 126 for char in text):
-            raise ValueError("Podaj poprawny Client ID i Client Secret (bez spacji i nowych linii).")
+            raise ValueError(t("setup.invalid_credentials"))
         return SecretStr(text) if isinstance(value, SecretStr) else text
 
 
@@ -59,7 +60,7 @@ def setup_status():
 def complete_setup(credentials: SetupCredentials, request: Request):
     with _setup_lock:
         if is_configured():
-            raise HTTPException(status_code=409, detail="Allegro jest już skonfigurowane.")
+            raise HTTPException(status_code=409, detail=t("setup.already_configured"))
         # Require the browser's exact origin and a token from the setup status
         # response. This prevents a different website from claiming first-run setup.
         origin = request.headers.get("origin", "")
@@ -67,12 +68,12 @@ def complete_setup(credentials: SetupCredentials, request: Request):
         if origin != str(request.base_url).rstrip("/") or not hmac.compare_digest(
             token.encode("utf-8"), _setup_token.encode("utf-8")
         ):
-            raise HTTPException(status_code=403, detail="Otwórz konfigurację w aplikacji Weles i spróbuj ponownie.")
+            raise HTTPException(status_code=403, detail=t("setup.wrong_origin"))
 
         generated_token = None
         if not requires_access_token():
             if request.url.hostname not in {"localhost", "127.0.0.1", "::1"}:
-                raise HTTPException(status_code=403, detail="Pierwszą konfigurację otwórz pod adresem localhost.")
+                raise HTTPException(status_code=403, detail=t("setup.localhost_only"))
             generated_token = secrets.token_urlsafe(32)
 
         values = {
@@ -87,7 +88,7 @@ def complete_setup(credentials: SetupCredentials, request: Request):
             logger.error("Could not save first-run configuration (%s)", type(exc).__name__)
             raise HTTPException(
                 status_code=503,
-                detail="Nie udało się zapisać .env. Sprawdź uprawnienia pliku i montowanie w Dockerze, a następnie spróbuj ponownie.",
+                detail=t("setup.save_failed"),
             ) from None
 
         os.environ.update(values)

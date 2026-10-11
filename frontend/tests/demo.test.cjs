@@ -67,6 +67,35 @@ test('browser data is isolated between visitors', async () => {
   assert.equal((await second.read('/orders/')).length, 5);
 });
 
+test('document editor saves locally and previews an unsaved personalized demo PDF', async () => {
+  const { api, read, send } = demo();
+  const settings = await read('/print/document-settings');
+  assert.equal(settings.profiles.default.source, 'upload');
+  const template = {id:'default',name:'Demo insert',blocks:[{type:'heading',text:'Hello {{buyer_name}} - {{order_number}}'}]};
+  const preview = await api.request('/print/document-preview', {method:'POST',body:JSON.stringify({order_id:'demo-101',template})});
+  assert.equal(preview.ok, true);
+  assert.match(await preview.text(), /Hello Anna Demo - DEMO-101/);
+  assert.deepEqual(await read('/print/document-settings'), settings);
+  await send('/print/document-settings', {source:'template',template});
+  assert.deepEqual(await read('/print/custom-doc/info'), {available:true,source:'template',upload_available:false,size:0});
+  const custom = await api.request('/print/custom-doc?order_id=demo-102');
+  assert.match(await custom.text(), /Hello Marek Demo - DEMO-102/);
+  assert.equal((await api.request('/print/custom-doc?order_id=missing')).status, 404);
+  assert.match(await (await api.request('/print/combined/demo-101')).text(), /Hello Anna Demo/);
+  await send('/print/document-settings', {source:'upload',template});
+  assert.equal((await read('/print/custom-doc/info')).available, false);
+  assert.equal((await read('/print/document-settings')).templates[0].name, 'Demo insert');
+  assert.equal((await demo().read('/print/document-settings')).templates[0].blocks.length, 0);
+});
+
+test('demo build includes every referenced local script including the editor', () => {
+  require('node:child_process').execFileSync(process.execPath, ['tools/build-demo.cjs']);
+  const html = fs.readFileSync('dist/index.html','utf8');
+  for (const [,src] of html.matchAll(/<script src="([^"]+)"/g)) {
+    assert.ok(fs.existsSync(`dist/${src}`), src);
+  }
+});
+
 test('locker sizes are stored per order, validated, printed and reset', async () => {
   const { api, read } = demo();
   const orders = await read('/orders/');
@@ -87,7 +116,18 @@ test('locker sizes are stored per order, validated, printed and reset', async ()
   api.setParcelSize(id, 'A');
   assert.equal((await read('/orders/')).find(order => order.id === id).shipment_id, null);
   assert.equal((await api.request(`/print/orders/${id}/label?parcel_size=D`)).status, 400);
-  assert.equal((await api.request(`/print/orders/${id}/label?weight=1`)).status, 400);
+  assert.equal((await api.request(`/print/orders/${id}/label`)).status, 200);
   api.reset();
   assert.equal((await read('/orders/')).find(order => order.id === id).parcel_size, 'A');
+});
+
+test('locker PATCH and shipment readback match the shared application contracts', async () => {
+  const {api, read, send} = demo();
+  assert.equal((await send('/orders/demo-102/parcel-size', {parcel_size:'B'}, 'PATCH')).parcel_size, 'B');
+  const label = await api.request('/print/orders/demo-102/label');
+  assert.match(await label.text(), /SIZE B/);
+  const shipment = await read('/print/orders/demo-102/shipment');
+  assert.equal(shipment.shipment_id, 'sample-demo-102');
+  assert.equal(shipment.tracking_number, 'DEMO-TRACK-demo-102');
+  assert.equal((await api.request('/orders/demo-102/parcel-size', {method:'PATCH',body:'{"parcel_size":"C"}'})).status,409);
 });

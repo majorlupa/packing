@@ -2,8 +2,8 @@
 Print routes — return PDF/HTML content for the browser to trigger printing.
 Carrier label: PDF fetched from Allegro shipment management API.
 Sales document: HTML rendered via Jinja2 template, browser prints.
-Custom doc: user-uploaded static PDF, served as-is.
-Combined: invoice rendered to PDF via weasyprint, merged with custom doc via pypdf.
+Custom doc: selected static upload or structured template personalized for an order.
+Combined: invoice rendered to PDF via weasyprint, merged with selected custom doc via pypdf.
 """
 import asyncio
 import io
@@ -22,6 +22,8 @@ from pydantic import BaseModel, Field
 import store
 import api.allegro as allegro
 from api.allegro import to_http_exception
+from localization import current_language, date_format, t
+from routes.documents import active_template, has_content, personalized_pdf
 
 router = APIRouter(prefix="/print", tags=["print"])
 
@@ -51,20 +53,20 @@ def _order_lock(order_id: str) -> asyncio.Lock:
 def _build_invoice_html(order_id: str) -> str:
     order = store.get_order(order_id)
     if order is None:
-        raise HTTPException(status_code=404, detail="Order not found.")
+        raise HTTPException(status_code=404, detail=t("error.order_not_found"))
     s = store.get_invoice_settings()
 
     rows = []
     if s.get("show_buyer_name") and order.buyer_name:
-        rows.append(("Kupujący", order.buyer_name, True))
+        rows.append((t("doc.buyer"), order.buyer_name, True))
     if s.get("show_buyer_address") and order.buyer_address:
-        rows.append(("Adres", order.buyer_address.replace("\n", "<br>"), False))
+        rows.append((t("doc.address"), order.buyer_address.replace("\n", "<br>"), False))
     if s.get("show_courier") and order.courier:
-        rows.append(("Kurier", order.courier, False))
+        rows.append((t("doc.courier"), order.courier, False))
     if s.get("show_pickup_point") and order.pickup_point:
-        rows.append(("Punkt odbioru", order.pickup_point, True))
+        rows.append((t("doc.pickup_point"), order.pickup_point, True))
     if s.get("show_allegro_id"):
-        rows.append(("Nr zamówienia", order.allegro_id, False))
+        rows.append((t("doc.order_number"), order.allegro_id, False))
 
     show_price = s.get("show_price") and s.get("show_items")
     items = order.items if s.get("show_items") else []
@@ -72,9 +74,18 @@ def _build_invoice_html(order_id: str) -> str:
     if show_price and items and all(i.unit_price is not None for i in items):
         total = sum(i.unit_price * i.quantity for i in items)
 
+    labels = {
+        name: t(f"doc.{name}")
+        for name in ("title", "products", "product", "quantity", "unit_price", "value", "total")
+    }
+    # The language is read from the request scope set by the middleware, so the
+    # rendered document matches the Accept-Language of this very request.
+    language = current_language.get()
     template = _jinja.get_template("invoice.html")
     return template.render(
-        date=date.today().strftime("%-d.%-m.%Y"),
+        lang=language,
+        labels=labels,
+        date=date.today().strftime(date_format(language)),
         rows=rows,
         items=items,
         show_price=show_price,
@@ -142,6 +153,13 @@ def save_shipment_settings(body: ShipmentSettings):
     return {"status": "saved"}
 
 
+INPOST_LOCKER_SIZES = {
+    "A": {"length": 64.0, "width": 38.0, "height": 8.0},
+    "B": {"length": 64.0, "width": 38.0, "height": 19.0},
+    "C": {"length": 64.0, "width": 38.0, "height": 41.0},
+}
+
+
 @router.get("/orders/{order_id}/label")
 async def print_label(
     order_id: str,
@@ -153,12 +171,13 @@ async def print_label(
     """Create the shipment once (if needed) and return the label PDF.
 
     Dimensions come from the shipping settings unless this request overrides them.
+    For InPost lockers, dimensions are derived from the order's parcel_size (A/B/C).
     Serialised per order so a double click cannot create two shipments.
     """
     async with _order_lock(order_id):
         order = store.get_order(order_id)
         if order is None:
-            raise HTTPException(status_code=404, detail="Order not found.")
+            raise HTTPException(status_code=404, detail=t("error.order_not_found"))
 
         settings = store.get_shipment_settings()
         package = dict(settings["package"])
@@ -166,27 +185,87 @@ async def print_label(
             if value is not None:
                 package[key] = value
 
+        if order.is_inpost_locker and not order.shipment_id:
+            if not order.parcel_size and not (length and width and height):
+                raise HTTPException(
+                    status_code=400,
+                    detail=t("label.select_size"),
+                )
+            if order.parcel_size in INPOST_LOCKER_SIZES:
+                dims = INPOST_LOCKER_SIZES[order.parcel_size]
+                if length is None:
+                    package["length"] = dims["length"]
+                if width is None:
+                    package["width"] = dims["width"]
+                if height is None:
+                    package["height"] = dims["height"]
+
         try:
-            if not order.shipment_id:
+            shipment_id = order.shipment_id
+            tracking_number = order.tracking_number
+            created_now = False
+            if not shipment_id:
                 shipment_id = await allegro.create_shipment(order, settings["sender"], package)
-                order.shipment_id = shipment_id
-                store.save_order(order)
-            label_bytes = await allegro.download_label(order.shipment_id, package.get("page_size", "A6"))
+                created_now = True
+                tracking_number = await allegro.get_shipment_tracking(shipment_id)
+            elif not tracking_number:
+                # The shipment exists but the waybill was never stored — either
+                # Allegro had not issued it yet at creation time, or this order
+                # predates tracking. Allegro assigns the carrier number shortly
+                # after creation, so re-reading it on a later print recovers it.
+                tracking_number = await allegro.get_shipment_tracking(shipment_id)
+
+            # The new id must be saved even when no tracking number came back:
+            # the shipment has already been paid for, and losing the id would let
+            # a second click buy another one. Only the two fields are written —
+            # while Allegro was creating the shipment the order may have moved on
+            # (marked done, reverted, archived), and saving the whole stale record
+            # back would undo that change.
+            if created_now or (tracking_number and tracking_number != order.tracking_number):
+                def remember_shipment(state):
+                    stored = state["orders"].get(order_id)
+                    if stored is not None:
+                        if not stored.get("shipment_id"):
+                            stored["shipment_id"] = shipment_id
+                        if tracking_number:
+                            stored["tracking_number"] = tracking_number
+
+                store.transact(remember_shipment)
+
+            label_bytes = await allegro.download_label(shipment_id, package.get("page_size", "A6"))
         except allegro.AllegroError as exc:
             raise to_http_exception(exc)
         except httpx.HTTPError as exc:
-            raise HTTPException(status_code=502, detail=f"Brak łączności z Allegro: {exc}")
+            raise HTTPException(status_code=502, detail=t("common.allegro_unreachable", error=exc))
 
     return Response(content=label_bytes, media_type="application/pdf")
 
 
 @router.get("/orders/{order_id}/shipment")
 async def shipment_info(order_id: str):
-    """Whether a shipment already exists for this order (so the UI can warn before printing)."""
+    """Whether a shipment already exists for this order (so the UI can warn before printing).
+
+    Also the place the browser reads the tracking number after printing. If the
+    shipment exists but the number was never stored, fetch it once and persist
+    it, so re-opening the packing card does not have to wait for Allegro again.
+    """
     order = store.get_order(order_id)
     if order is None:
-        raise HTTPException(status_code=404, detail="Order not found.")
-    return {"shipment_id": order.shipment_id}
+        raise HTTPException(status_code=404, detail=t("error.order_not_found"))
+    tracking_number = order.tracking_number
+    if order.shipment_id and not tracking_number:
+        try:
+            tracking_number = await allegro.get_shipment_tracking(order.shipment_id)
+        except allegro.AllegroError:
+            tracking_number = None
+        if tracking_number:
+            def remember_tracking(state):
+                stored = state["orders"].get(order_id)
+                if stored is not None and not stored.get("tracking_number"):
+                    stored["tracking_number"] = tracking_number
+
+            store.transact(remember_tracking)
+    return {"shipment_id": order.shipment_id, "tracking_number": tracking_number}
 
 
 @router.get("/orders/{order_id}/invoice")
@@ -197,47 +276,72 @@ async def print_invoice(order_id: str):
 
 
 @router.get("/orders/{order_id}/combined")
-async def print_combined(order_id: str):
-    """Invoice + custom doc merged into one PDF."""
+def print_combined(order_id: str):
+    """Invoice + selected custom doc merged into one PDF (render off the event loop)."""
     import weasyprint
     from pypdf import PdfWriter, PdfReader
 
     html = _build_invoice_html(order_id)
     invoice_pdf = weasyprint.HTML(string=html).write_pdf()
 
-    if not os.path.exists(CUSTOM_DOC_PATH):
-        return Response(content=invoice_pdf, media_type="application/pdf")
+    custom_pdf = selected_custom_pdf(order_id)
+    if custom_pdf is None:
+        return Response(content=invoice_pdf, media_type="application/pdf", headers={"Cache-Control": "no-store"})
 
     writer = PdfWriter()
     for page in PdfReader(io.BytesIO(invoice_pdf)).pages:
         writer.add_page(page)
-    for page in PdfReader(str(CUSTOM_DOC_PATH)).pages:
+    for page in PdfReader(io.BytesIO(custom_pdf)).pages:
         writer.add_page(page)
 
     out = io.BytesIO()
     writer.write(out)
-    return Response(content=out.getvalue(), media_type="application/pdf")
+    return Response(content=out.getvalue(), media_type="application/pdf", headers={"Cache-Control": "no-store"})
 
 
 # ---- Custom document ----
 
 
+def selected_custom_pdf(order_id: str | None = None) -> bytes | None:
+    settings = store.get_document_settings()
+    if settings["profiles"]["default"]["source"] == "template":
+        template = active_template(settings)
+        if not has_content(template):
+            return None
+        return personalized_pdf(template, order_id)
+    if not CUSTOM_DOC_PATH.exists():
+        return None
+    return CUSTOM_DOC_PATH.read_bytes()
+
+
 @router.get("/custom-doc/info")
 def custom_doc_info():
-    if os.path.exists(CUSTOM_DOC_PATH):
-        return {"available": True, "size": os.path.getsize(CUSTOM_DOC_PATH)}
-    return {"available": False}
+    settings = store.get_document_settings()
+    source = settings["profiles"]["default"]["source"]
+    uploaded = CUSTOM_DOC_PATH.exists()
+    available = uploaded if source == "upload" else has_content(active_template(settings))
+    return {"available": available, "source": source, "upload_available": uploaded,
+            "size": CUSTOM_DOC_PATH.stat().st_size if uploaded else None}
 
 
 @router.post("/custom-doc")
 async def upload_custom_doc(file: UploadFile = File(...)):
     if not (file.filename or "").lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Wymagany plik PDF.")
+        raise HTTPException(status_code=400, detail=t("print.pdf_required"))
     payload = await file.read(MAX_CUSTOM_DOC_BYTES + 1)
     if len(payload) > MAX_CUSTOM_DOC_BYTES:
-        raise HTTPException(status_code=413, detail="Plik jest za duży (limit 20 MB).")
+        raise HTTPException(status_code=413, detail=t("print.file_too_large"))
     if not payload.startswith(b"%PDF-"):
-        raise HTTPException(status_code=400, detail="To nie jest plik PDF.")
+        raise HTTPException(status_code=400, detail=t("print.not_a_pdf"))
+    from pypdf import PdfReader
+    try:
+        reader = PdfReader(io.BytesIO(payload))
+        if reader.is_encrypted or not reader.pages:
+            raise ValueError("Encrypted or empty PDF")
+        for page in reader.pages:
+            _ = page.mediabox
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=t("print.not_a_pdf")) from exc
     CUSTOM_DOC_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = CUSTOM_DOC_PATH.with_name(CUSTOM_DOC_PATH.name + ".tmp")
     with open(tmp, "wb") as handle:
@@ -249,12 +353,11 @@ async def upload_custom_doc(file: UploadFile = File(...)):
 
 
 @router.get("/custom-doc")
-def serve_custom_doc():
-    if not os.path.exists(CUSTOM_DOC_PATH):
-        raise HTTPException(status_code=404, detail="Brak wgranego dokumentu.")
-    with open(CUSTOM_DOC_PATH, "rb") as handle:
-        content = handle.read()
-    return Response(content=content, media_type="application/pdf")
+def serve_custom_doc(order_id: str | None = Query(None, min_length=1, max_length=200)):
+    content = selected_custom_pdf(order_id)
+    if content is None:
+        raise HTTPException(status_code=404, detail=t("print.custom_doc_missing"))
+    return Response(content=content, media_type="application/pdf", headers={"Cache-Control": "no-store"})
 
 
 @router.delete("/custom-doc")

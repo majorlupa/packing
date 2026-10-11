@@ -16,7 +16,7 @@
     status: 'pending', picking_list_id: null, shipment_id: null,
     items: items.map(([name, quantity, unit_price]) => ({ name, quantity, unit_price })),
   }));
-  let orders, lists, archive, shipment, invoice, counter, syncCounter;
+  let orders, lists, archive, shipment, invoice, documents, counter, syncCounter;
   let tourActive = false;
   const json = (body, status = 200) => new Response(JSON.stringify(body), {
     status, headers: { 'Content-Type': 'application/json' },
@@ -25,6 +25,11 @@
     orders = initialOrders(); lists = []; archive = []; counter = 0; syncCounter = 0;
     shipment = { sender: {}, package: { length: 30, width: 20, height: 15, weight: 1, page_size: 'A6' } };
     invoice = { free_text: 'Dziękujemy za zakup! — Weles DEMO' };
+    documents = {version:1,templates:[{id:'default',name:'Mój dokument',blocks:[]}],
+      profiles:{default:{source:'upload',active_template_id:'default'}}};
+    const draft = global.DocumentEditor?.draft;
+    if (draft) Object.assign(draft, {source:'upload',name:documents.templates[0].name,blocks:[],
+      status:'idle',error:'',errorKey:null,revision:draft.revision + 1});
   }
   reset();
   function detach(id) {
@@ -43,11 +48,22 @@
     return size;
   }
   // A real, minimal PDF with an unmistakable sample watermark; no usable shipping barcode.
-  function samplePdf(order, label) {
+  function templateLines(order, template) {
+    const fields = {buyer_name:order.buyer_name,buyer_address:order.buyer_address,
+      order_number:order.allegro_id,date:new Date().toLocaleDateString('pl-PL'),
+      courier:order.courier,pickup_point:order.pickup_point || '-',tracking_number:order.tracking_number || '-'};
+    return ['SIMPLIFIED DEMO - TEXT ONLY; NO LOGOS OR FORMATTING', ...template.blocks.flatMap(block => {
+      if (block.type === 'customer') return [order.buyer_name, order.buyer_address];
+      if (block.type === 'items') return order.items.map(item => `${item.quantity} x ${item.name}${block.show_prices ? ` - ${item.unit_price} PLN` : ''}`);
+      if (block.type === 'logo') return ['[LOGO - available in the full application]'];
+      return String(block.text || '').replace(/\{\{([^{}]+)\}\}/g, (_, key) => fields[key] ?? '-').split('\n');
+    })];
+  }
+  function samplePdf(order, label, extra = []) {
     const lines = ['WELES / DEMO', label ? 'SAMPLE SHIPPING LABEL' : 'SAMPLE ORDER DOCUMENT',
       'NOT VALID FOR SHIPPING OR ACCOUNTING', order.allegro_id,
       ...(order.delivery_type === 'inpost_locker' ? [`PACZKOMAT INPOST - SIZE ${order.parcel_size}`] : []),
-      ...order.items.map(item => `${item.quantity} x ${item.name}`)];
+      ...order.items.map(item => `${item.quantity} x ${item.name}`), ...extra];
     const safe = value => value.normalize('NFKD').replace(/[^\x20-\x7E]/g, '?').replace(/[\\()]/g, '\\$&');
     const stream = `BT /F1 15 Tf 40 780 Td ${lines.map((line, i) => `${i ? '0 -30 Td ' : ''}(${safe(line)}) Tj`).join('\n')} ET`;
     const objects = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
@@ -69,7 +85,28 @@
     if (route === '/orders/status') return json({ ok: true, quarantined: 0 });
     if (route === '/orders/auth/status') return json({ authorized: true });
     if (route === '/orders/archive') return json(archive);
-    if (route === '/print/custom-doc/info') return json({ available: false });
+    if (route === '/print/document-settings') {
+      if (method === 'POST') {
+        if (!['upload','template'].includes(body.source) || body.template?.id !== 'default' || !Array.isArray(body.template.blocks) || body.template.blocks.length > 50) {
+          return json({detail:'Nieprawidłowy szablon demo.'}, 422);
+        }
+        documents.templates[0] = body.template;
+        documents.profiles.default.source = body.source;
+      }
+      return json(documents);
+    }
+    const customAvailable = documents.profiles.default.source === 'template' && documents.templates[0].blocks.some(block =>
+      ['customer','items'].includes(block.type) || (block.type === 'logo' ? block.image : String(block.text || '').trim()));
+    if (route === '/print/custom-doc/info') return json({available:Boolean(customAvailable),source:documents.profiles.default.source,upload_available:false,size:0});
+    if (route === '/print/document-preview' && method === 'POST' || route === '/print/custom-doc' && method === 'GET') {
+      const orderId = route === '/print/document-preview' ? body.order_id : new URLSearchParams(path.split('?')[1] || '').get('order_id');
+      const order = orders.find(entry => entry.id === orderId);
+      if (!order) return json({detail:'Nie znaleziono zamówienia.'}, 404);
+      if (route === '/print/custom-doc' && !customAvailable) return json({detail:'Wybierz i zapisz szablon dokumentu.'}, 404);
+      const template = route === '/print/document-preview' ? body.template : documents.templates[0];
+      if (!Array.isArray(template?.blocks) || !template.blocks.length) return json({detail:'Szablon jest pusty.'}, 422);
+      return samplePdf(order, false, templateLines(order, template));
+    }
     if (route === '/print/custom-doc' || route === '/print/custom-doc/upload') {
       return json({ detail: 'W demo pliki nie są przesyłane. Wypróbuj przykładowy dokument w widoku Pakowanie.' }, 400);
     }
@@ -115,6 +152,15 @@
       done.forEach(order => { archive.push({ ...order, archived_at: new Date().toISOString() }); detach(order.id); });
       orders = orders.filter(order => order.status !== 'done');
       response = json({ archived: done.length });
+    } else if (/^\/orders\/[^/]+\/parcel-size$/.test(route) && method === 'PATCH') {
+      const order = orders.find(entry => entry.id === route.split('/')[2]);
+      if (!order) return json({detail:'Nie znaleziono zamówienia.'}, 404);
+      if (order.shipment_id) return json({detail:'Przesyłka ma już etykietę.'}, 409);
+      try { return json({parcel_size:setParcelSize(order.id, body.parcel_size)}); }
+      catch (error) { return json({detail:error.message}, 422); }
+    } else if (/^\/print\/orders\/[^/]+\/shipment$/.test(route)) {
+      const order = orders.find(entry => entry.id === route.split('/')[3]);
+      return order ? json({shipment_id:order.shipment_id,tracking_number:order.tracking_number || null}) : json({detail:'Nie znaleziono zamówienia.'},404);
     } else if (/^\/orders\/[^/]+\/(done|undo-done|revert-pending)$/.test(route) && method === 'POST') {
       const [, , id, action] = route.split('/');
       const order = orders.find(entry => entry.id === id);
@@ -122,19 +168,21 @@
       order.status = { done: 'done', 'undo-done': 'packing', 'revert-pending': 'pending' }[action];
       if (action === 'revert-pending') { order.picking_list_id = null; detach(id); }
       response = json({ status: order.status });
-    } else if (/^\/print\/orders\/[^/]+\/(label|combined|invoice)$/.test(route)) {
-      const [, , , id, type] = route.split('/');
+    } else if (/^\/print\/orders\/[^/]+\/(label|combined|invoice)$/.test(route) || /^\/print\/combined\/[^/]+$/.test(route)) {
+      const parts = route.split('/');
+      const [id,type] = parts[2] === 'combined' ? [parts[3],'combined'] : [parts[3],parts[4]];
       const order = orders.find(entry => entry.id === id);
       if (!order) return json({ detail: 'Nie znaleziono zamówienia.' }, 404);
       if (type === 'label') {
         if (order.delivery_type === 'inpost_locker') {
-          const size = new URLSearchParams(path.split('?')[1] || '').get('parcel_size');
+          const size = new URLSearchParams(path.split('?')[1] || '').get('parcel_size') || order.parcel_size;
           if (!['A', 'B', 'C'].includes(size)) return json({ detail: 'Wybierz gabaryt A, B lub C.' }, 400);
           setParcelSize(id, size);
         }
         order.shipment_id = `sample-${id}`;
+        order.tracking_number = `DEMO-TRACK-${id}`;
       }
-      response = samplePdf(order, type === 'label');
+      response = samplePdf(order, type === 'label', type === 'combined' && customAvailable ? templateLines(order, documents.templates[0]) : []);
     } else return json({ detail: 'Ta funkcja wymaga pełnej wersji Weles. Demo działa wyłącznie na przykładowych danych.' }, 400);
     updateGuide();
     return response;

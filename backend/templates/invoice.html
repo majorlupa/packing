@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="pl">
+<html lang="{{ lang }}">
 <head>
 <meta charset="UTF-8">
-<title>Dokument sprzedażowy</title>
+<title>{{ labels.title }}</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -117,7 +117,7 @@
 <body>
 
 <div class="doc-header">
-  <div class="doc-title">Dokument sprzedażowy</div>
+  <div class="doc-title">{{ labels.title }}</div>
   <div class="doc-date">{{ date }}</div>
 </div>
 
@@ -133,13 +133,13 @@
 {% endif %}
 
 {% if items %}
-<div class="items-heading">Zamówione produkty</div>
+<div class="items-heading">{{ labels.products }}</div>
 <table class="items">
   <thead>
     <tr>
-      <th>Produkt</th>
-      <th class="qty">Ilość</th>
-      {% if show_price %}<th class="price">Cena jedn.</th><th class="price">Wartość</th>{% endif %}
+      <th>{{ labels.product }}</th>
+      <th class="qty">{{ labels.quantity }}</th>
+      {% if show_price %}<th class="price">{{ labels.unit_price }}</th><th class="price">{{ labels.value }}</th>{% endif %}
     </tr>
   </thead>
   <tbody>
@@ -157,7 +157,7 @@
   {% if show_price and total is not none %}
   <tfoot>
     <tr>
-      <td class="total-label" colspan="{% if show_price %}3{% else %}1{% endif %}">Razem</td>
+      <td class="total-label" colspan="{% if show_price %}3{% else %}1{% endif %}">{{ labels.total }}</td>
       <td>{{ "%.2f"|format(total) }} zł</td>
     </tr>
   </tfoot>

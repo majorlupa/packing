@@ -21,7 +21,9 @@ from typing import Callable, Dict, List, Optional, TypeVar
 
 from pydantic import ValidationError
 
+from localization import t
 from models.order import Order, PickingList
+from documents import DocumentSettings, default_document_settings
 
 DATA_DIR = Path(os.getenv("PACKING_DATA_DIR", "/app/data"))
 DATA_FILE = DATA_DIR / "state.json"
@@ -82,6 +84,7 @@ def _default_state() -> dict:
         "picking_list_counter": 0,
         "invoice_settings": deepcopy(DEFAULT_INVOICE_SETTINGS),
         "shipment_settings": deepcopy(DEFAULT_SHIPMENT_SETTINGS),
+        "document_settings": default_document_settings(),
         "archive": [],
         "quarantine": [],
     }
@@ -108,7 +111,7 @@ def _merged(defaults: dict, saved: object) -> dict:
 def _normalise(raw: object) -> dict:
     """Coerce whatever is on disk into the current schema, quarantining bad records."""
     if not isinstance(raw, dict):
-        raise StateError(f"{DATA_FILE} does not contain a JSON object.")
+        raise StateError(t("store.state_not_object", path=DATA_FILE))
 
     state = _default_state()
     quarantine: List[dict] = [q for q in (raw.get("quarantine") or []) if isinstance(q, dict)][:_MAX_QUARANTINE]
@@ -121,7 +124,7 @@ def _normalise(raw: object) -> dict:
             except (ValidationError, TypeError) as exc:
                 quarantine.append({"kind": "order", "id": key, "error": str(exc)[:500], "record": value})
     elif raw_orders not in (None, {}):
-        quarantine.append({"kind": "orders-collection", "id": "orders", "error": "nie jest obiektem", "record": None})
+        quarantine.append({"kind": "orders-collection", "id": "orders", "error": t("store.orders_collection"), "record": None})
 
     counter = raw.get("picking_list_counter")
     state["picking_list_counter"] = counter if isinstance(counter, int) and counter >= 0 else 0
@@ -154,6 +157,12 @@ def _normalise(raw: object) -> dict:
 
     state["invoice_settings"] = _merged(DEFAULT_INVOICE_SETTINGS, raw.get("invoice_settings"))
     state["shipment_settings"] = _merged(DEFAULT_SHIPMENT_SETTINGS, raw.get("shipment_settings"))
+    if "document_settings" in raw:
+        try:
+            state["document_settings"] = DocumentSettings.model_validate(raw["document_settings"]).model_dump()
+        except ValidationError as exc:
+            quarantine.append({"kind": "document-settings", "id": "document_settings",
+                               "error": str(exc)[:500], "record": raw["document_settings"]})
     state["quarantine"] = quarantine[:_MAX_QUARANTINE]
 
     state["_status"] = {
@@ -161,18 +170,28 @@ def _normalise(raw: object) -> dict:
         "quarantined": len(quarantine),
         "repaired": repaired,
         "message": (
-            f"{len(quarantine)} rekord(ów) pominięto — dane nie przechodzą walidacji."
+            t("store.quarantined", count=len(quarantine))
             if quarantine else ""
         ),
     }
     return state
 
 
+def _read_backup(problem: str) -> dict:
+    """Load the previous generation, or explain that neither file can be used."""
+    try:
+        return _normalise(json.loads(BACKUP_FILE.read_text(encoding="utf-8")))
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError, StateError) as exc:
+        raise StateError(
+            t("store.unreadable_and_no_backup", path=DATA_FILE, problem=problem, backup=BACKUP_FILE, exc=exc)
+        ) from exc
+
+
 def _load() -> dict:
     if not DATA_FILE.exists():
         if BACKUP_FILE.exists():
-            state = _normalise(json.loads(BACKUP_FILE.read_text(encoding="utf-8")))
-            state["_status"].update(ok=False, message="Brak/czytelnego state.json nie było — odtworzono z kopii zapasowej.")
+            state = _read_backup(t("store.problem_missing_file"))
+            state["_status"].update(ok=False, message=t("store.recovered_from_backup"))
             return state
         state = _default_state()
         state["_status"] = {"ok": True, "quarantined": 0, "repaired": 0, "message": ""}
@@ -183,18 +202,17 @@ def _load() -> dict:
     except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
         if not BACKUP_FILE.exists():
             raise StateError(
-                f"Nie można odczytać {DATA_FILE} ({exc}). Plik NIE został nadpisany — "
-                "przywróć go ręcznie z kopii zapasowej lub popraw i zrestartuj kontener."
+                t("store.unreadable_no_backup", path=DATA_FILE, exc=exc)
             ) from exc
         broken = DATA_FILE.with_name(f"state.json.corrupt-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
         try:
             os.replace(DATA_FILE, broken)
         except OSError:
             pass
-        state = _normalise(json.loads(BACKUP_FILE.read_text(encoding="utf-8")))
+        state = _read_backup(str(exc))
         state["_status"].update(
             ok=False,
-            message=f"state.json był uszkodzony — odtworzono z kopii zapasowej ({broken.name}).",
+            message=t("store.corrupt_recovered", name=broken.name),
         )
         return state
 
@@ -364,5 +382,19 @@ def get_shipment_settings() -> dict:
 def save_shipment_settings(settings: dict) -> None:
     def mutate(state):
         state["shipment_settings"] = _merged(DEFAULT_SHIPMENT_SETTINGS, settings)
+
+    transact(mutate)
+
+
+def get_document_settings() -> dict:
+    with _LOCK:
+        return deepcopy(_load()["document_settings"])
+
+
+def save_document_settings(settings: dict) -> None:
+    validated = DocumentSettings.model_validate(settings).model_dump()
+
+    def mutate(state):
+        state["document_settings"] = validated
 
     transact(mutate)

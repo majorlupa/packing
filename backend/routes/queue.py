@@ -1,9 +1,10 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Literal
 import uuid
 import store
-from models.order import OrderStatus, PickingList
+from localization import t
+from models.order import Order, OrderStatus, PickingList
 
 router = APIRouter(tags=["queue"])
 
@@ -39,7 +40,7 @@ async def rename_picking_list(pl_id: str, req: RenamePickingListRequest):
     def mutate(state):
         pl = state["picking_lists"].get(pl_id)
         if pl is None:
-            raise HTTPException(status_code=404, detail="Picking list not found.")
+            raise HTTPException(status_code=404, detail=t("error.picking_list_not_found"))
         pl["name"] = req.name
         return pl
 
@@ -54,7 +55,7 @@ async def create_picking_list(req: CreatePickingListRequest):
     def mutate(state):
         for oid in order_ids:
             if oid not in state["orders"]:
-                raise HTTPException(status_code=404, detail=f"Order {oid} not found.")
+                raise HTTPException(status_code=404, detail=t("orders.bad_order_id", order_id=oid))
         # Selecting an order that sits in another list moves it instead of leaving a dangling id.
         for oid in order_ids:
             _detach_from_lists(state, oid)
@@ -62,7 +63,7 @@ async def create_picking_list(req: CreatePickingListRequest):
         state["picking_list_counter"] = int(state.get("picking_list_counter") or 0) + 1
         pl = PickingList(
             id=str(uuid.uuid4()),
-            name=req.name or f"Lista #{state['picking_list_counter']}",
+            name=req.name or t("picking.default_name", number=state["picking_list_counter"]),
             order_ids=order_ids,
         )
         state["picking_lists"][pl.id] = pl.model_dump(mode="json")
@@ -84,12 +85,16 @@ async def revert_to_pending(pl_id: str):
     def mutate(state):
         pl = state["picking_lists"].get(pl_id)
         if pl is None:
-            raise HTTPException(status_code=404, detail="Picking list not found.")
+            raise HTTPException(status_code=404, detail=t("error.picking_list_not_found"))
         for oid in pl["order_ids"]:
             order = state["orders"].get(oid)
-            if order is not None:
+            if order is None:
+                continue
+            order["picking_list_id"] = None
+            # A finished order is already packed, shipped and archived-eligible;
+            # reverting the list must not pull it back into Oczekujące.
+            if order["status"] != OrderStatus.done.value:
                 order["status"] = OrderStatus.pending.value
-                order["picking_list_id"] = None
         state["picking_lists"].pop(pl_id, None)
         return {"status": "ok"}
 
@@ -98,17 +103,23 @@ async def revert_to_pending(pl_id: str):
 
 @router.post("/picking-lists/{pl_id}/start-packing")
 async def start_packing(pl_id: str):
-    """Move all orders in a picking list to packing status."""
+    """Move the picking list's orders to packing status.
+
+    A finished order stays in Gotowe: the packing view keeps the list for
+    reprinting, so a stale list must not pull done orders back into the queue.
+    """
 
     def mutate(state):
         pl = state["picking_lists"].get(pl_id)
         if pl is None:
-            raise HTTPException(status_code=404, detail="Picking list not found.")
+            raise HTTPException(status_code=404, detail=t("error.picking_list_not_found"))
+        moved = []
         for oid in pl["order_ids"]:
             order = state["orders"].get(oid)
-            if order is not None:
+            if order is not None and order["status"] != OrderStatus.done.value:
                 order["status"] = OrderStatus.packing.value
-        return {"status": "ok", "order_ids": pl["order_ids"]}
+                moved.append(oid)
+        return {"status": "ok", "order_ids": moved}
 
     return store.transact(mutate)
 
@@ -117,7 +128,7 @@ def _set_status(order_id: str, status: OrderStatus, clear_list: bool = False):
     def mutate(state):
         order = state["orders"].get(order_id)
         if order is None:
-            raise HTTPException(status_code=404, detail="Order not found.")
+            raise HTTPException(status_code=404, detail=t("error.order_not_found"))
         order["status"] = status.value
         if clear_list:
             order["picking_list_id"] = None
@@ -140,3 +151,25 @@ async def revert_to_pending_single(order_id: str):
 @router.post("/orders/{order_id}/undo-done")
 async def undo_done(order_id: str):
     return _set_status(order_id, OrderStatus.packing)
+
+
+class ParcelSizeRequest(BaseModel):
+    parcel_size: Literal["A", "B", "C"]
+
+
+@router.patch("/orders/{order_id}/parcel-size")
+async def set_parcel_size(order_id: str, req: ParcelSizeRequest) -> dict[str, str]:
+    """Persist a locker size locally; carrier integration is deferred."""
+    def mutate(state: dict) -> dict[str, str]:
+        data = state["orders"].get(order_id)
+        if data is None:
+            raise HTTPException(status_code=404, detail=t("error.order_not_found"))
+        order = Order.model_validate(data)
+        if not order.is_inpost_locker:
+            raise HTTPException(status_code=400, detail=t("parcel.locker_only"))
+        if order.shipment_id or order.tracking_number:
+            raise HTTPException(status_code=409, detail=t("parcel.shipment_exists"))
+        data["parcel_size"] = req.parcel_size
+        return {"parcel_size": req.parcel_size}
+
+    return store.transact(mutate)

@@ -4,6 +4,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
+const evidence = name => path.join(process.env.TMPDIR || require('node:os').tmpdir(), name);
 const root = path.resolve(__dirname, '../dist');
 const server = http.createServer((req, res) => {
   const relative = req.url === '/packing/' ? 'index.html' : req.url.replace(/^\/packing\//, '');
@@ -28,13 +29,33 @@ const server = http.createServer((req, res) => {
     const url = `http://127.0.0.1:${server.address().port}/packing/`;
     await page.goto(url);
     await page.locator('.demo-welcome[open]').waitFor();
-    await page.screenshot({ path: '/tmp/weles-demo-welcome.png' });
+    await page.screenshot({ path: evidence('weles-demo-welcome.png') });
     await page.locator('#demo-skip').click();
     assert.equal(await page.locator('#count-pending').innerText(), '5');
     assert.equal(await page.locator('#demo-guide').isVisible(), false);
     await page.reload();
     await page.locator('#demo-tour').waitFor();
     assert.equal(await page.locator('.demo-welcome').isVisible(), false);
+    // The shared editor must work entirely through the browser-only adapter.
+    await page.locator('#btn-settings').click();
+    await page.locator('.editor-add-block').waitFor();
+    await page.locator('input[name="doc-source"][value="template"]').check();
+    await page.locator('.editor-block-type').selectOption('heading');
+    await page.locator('.editor-add-block').click();
+    await page.locator('.editor-block-text').fill('Hello {{buyer_name}} - {{order_number}}');
+    await page.locator('.editor-preview-order').selectOption('demo-102');
+    const previewReady = page.waitForEvent('popup');
+    await page.locator('.editor-preview').click();
+    const previewPopup = await previewReady;
+    await previewPopup.close();
+    const previewText = await page.evaluate(async () => (await WelesDemo.request('/print/document-preview', {
+      method:'POST',body:JSON.stringify({order_id:'demo-102',template:{blocks:DocumentEditor.draft.blocks}})
+    })).text());
+    assert.match(previewText, /Hello Marek Demo - DEMO-102/);
+    await page.locator('.editor-save').click();
+    await page.waitForFunction(() => DocumentEditor.draft.status === 'saved');
+    assert.equal(await page.evaluate(async () => (await (await WelesDemo.request('/print/custom-doc/info')).json()).available), true);
+    await page.locator('[data-queue="pending"]').click();
     await page.locator('#demo-tour').click();
     await page.locator('#order-list input[type=checkbox]').first().check();
     await page.locator('#btn-create-pl').click();
@@ -58,13 +79,19 @@ const server = http.createServer((req, res) => {
     await page.locator('.archive-item').waitFor();
     await page.locator('#demo-reset').click();
     await page.waitForFunction(() => document.getElementById('count-pending').textContent === '5');
+    await page.locator('#btn-settings').click();
+    await page.locator('[data-tab="documents"]').click();
+    await page.locator('.editor-add-block').waitFor();
+    assert.equal(await page.locator('.editor-block-text').count(), 0, 'restart must clear the editor draft as well as its saved settings');
+    assert.equal(await page.locator('input[name="doc-source"][value="upload"]').isChecked(), true);
+    await page.locator('[data-queue="pending"]').click();
     assert.match(await page.locator('#demo-step').innerText(), /1 \/ 5/);
     await page.locator('#demo-skip-guide').click();
     assert.equal(await page.locator('#demo-guide').isVisible(), false);
     await page.locator('#demo-tour').click();
-    await page.screenshot({ path: '/tmp/weles-demo-workflow.png' });
+    await page.screenshot({ path: evidence('weles-demo-workflow.png') });
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.screenshot({ path: '/tmp/weles-demo-mobile.png' });
+    await page.screenshot({ path: evidence('weles-demo-mobile.png') });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile viewport must not overflow');
     await page.locator('#order-list input[type=checkbox]').first().check();
     await page.locator('#btn-create-pl').click();
@@ -90,9 +117,10 @@ const server = http.createServer((req, res) => {
     const lockerPopup = await lockerPopupReady;
     await page.waitForFunction(() => document.getElementById('btn-label').textContent.includes('✓'));
     await lockerPopup.close();
-    await page.locator('input[name="parcel-size"][value="C"]').check();
-    assert.equal(await page.locator('#btn-label').evaluate(el => el.classList.contains('printed')), false);
-    await page.screenshot({ path: '/tmp/weles-demo-locker-mobile.png' });
+    await page.locator('[data-queue="pending"]').click();
+    await page.locator('[data-queue="packing"]').click();
+    assert.equal(await page.locator('input[name="parcel-size"][value="C"]').isDisabled(), true);
+    await page.screenshot({ path: evidence('weles-demo-locker-mobile.png') });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     const fresh = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await fresh.goto(url);
