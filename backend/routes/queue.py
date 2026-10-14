@@ -11,7 +11,7 @@ router = APIRouter(tags=["queue"])
 
 
 class CreatePickingListRequest(BaseModel):
-    name: str = ""
+    name: str = Field("", max_length=120)
     order_ids: list[str] = Field(min_length=1)
 
 
