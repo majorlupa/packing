@@ -3,14 +3,14 @@ import base64
 import io
 import re
 import warnings
-from datetime import date
+from datetime import date, datetime
 from html import escape
 from typing import Literal
 
 from localization import current_language, date_format, t
 from models.order import Order
 from PIL import Image
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 PLACEHOLDERS = {"buyer_name", "buyer_address", "order_number", "date", "courier", "pickup_point", "tracking_number"}
 _TOKEN = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_.]*)\s*\}\}")
@@ -99,6 +99,39 @@ class DocumentTemplate(BaseModel):
             cursor = block.y + block.h + 6
         self.warnings = sorted({f"Unknown placeholder: {token}" for block in self.blocks
                                 for token in _TOKEN.findall(block.text) if token not in CANVAS_PLACEHOLDERS})
+        return self
+
+
+class DocumentTemplateExport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    format: str
+    version: int
+    exported_at: datetime
+    templates: list[DocumentTemplate] = Field(min_length=1, max_length=10)
+
+    @field_validator("format", mode="before")
+    @classmethod
+    def valid_format(cls, value):
+        if value != "packing.document-templates":
+            raise ValueError(t("document.import_format"))
+        return value
+
+    @field_validator("version", mode="before")
+    @classmethod
+    def valid_version(cls, value):
+        if type(value) is not int or value != 1:
+            raise ValueError(t("document.import_version"))
+        return value
+
+    @model_validator(mode="after")
+    def unique_names(self):
+        for template in self.templates:
+            template.name = template.name.strip()
+            if not template.name:
+                raise ValueError(t("document.invalid_template"))
+        names = [template.name for template in self.templates]
+        if len(names) != len(set(names)):
+            raise ValueError(t("document.import_duplicate_names"))
         return self
 
 

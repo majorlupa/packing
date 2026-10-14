@@ -29,6 +29,7 @@ var DocumentEditor = (function () {
   var boundNodes = [];
   var settingsCache = null;
   var collectionBusy = false;
+  var importConflict = 'rename';
 
   function el(tag, className) {
     var node = document.createElement(tag);
@@ -178,6 +179,7 @@ var DocumentEditor = (function () {
 
   function statusText() {
     if (!draft) return '';
+    if (draft.status === 'imported') return t('doc.imported', { count: draft.imported });
     if (draft.status === 'saving') return t('doc.statusSaving');
     if (draft.status === 'error') return t('doc.statusError', { detail: draft.errorKey ? t(draft.errorKey) : (draft.error || '') });
     if (draft.status === 'saved') return t('doc.statusSaved');
@@ -206,7 +208,7 @@ var DocumentEditor = (function () {
     var blocked = templateBlockedReason();
     if (ui.statusNode) ui.statusNode.textContent = statusText();
     if (ui.saveBtn) ui.saveBtn.disabled = draft.saving || collectionBusy || Boolean(blocked);
-    if (ui.previewBtn) ui.previewBtn.disabled = !ctx.orders.length || !draft.previewOrderId || !hasContent() || Boolean(blocked);
+    if (ui.previewBtn) ui.previewBtn.disabled = collectionBusy || !ctx.orders.length || !draft.previewOrderId || !hasContent() || Boolean(blocked);
     if (ui.noteNode) ui.noteNode.textContent = previewNoteText(ctx);
     if (ui.collectionControls) ui.collectionControls.forEach(function (node) {
       node.disabled = draft.saving || collectionBusy || (node.classList.contains('editor-template-delete') && settingsCache.templates.length < 2) || (node.classList.contains('editor-template-duplicate') && settingsCache.templates.length >= 10);
@@ -544,7 +546,7 @@ var DocumentEditor = (function () {
     if (action === 'delete' && settingsCache.templates.length < 2 || action === 'duplicate' && settingsCache.templates.length >= 10) return Promise.resolve();
     if (action === 'delete' && !window.confirm(t('doc.confirmDelete'))) return Promise.resolve();
     // Duplicate/save must snapshot the latest draft, rather than silently cloning stale server content.
-    var dirty = draft.revision > 0 && draft.status !== 'saved' && draft.status !== 'idle';
+    var dirty = isDirty();
     if (action === 'select' || action === 'delete') {
       if (dirty && !window.confirm(t('doc.discard'))) { render(ctx); return Promise.resolve(); }
     }
@@ -557,9 +559,73 @@ var DocumentEditor = (function () {
         ...(action === 'duplicate' ? { body: JSON.stringify({ name: draft.name.slice(0, 90) + ' (copy)' }) } : {}),
       });
     }).then(function (saved) {
-      draft = null; syncDraft(saved); if (onSaved) onSaved(saved);
-      if (activeInstance) { var active = activeInstance.ctx; draft.previewOrderId = active.orders.length ? active.orders[0].id : ''; render(active); }
+      adoptCollection(saved);
     }).catch(function (err) { setError(err.message || String(err)); }).finally(function () { collectionBusy = false; refreshActive(); });
+  }
+
+  function isDirty() {
+    return draft.revision > 0 && draft.status !== 'saved' && draft.status !== 'idle';
+  }
+
+  function adoptCollection(saved) {
+    draft = null; syncDraft(saved);
+    if (onSaved) onSaved(saved);
+    if (activeInstance) {
+      var active = activeInstance.ctx;
+      draft.previewOrderId = active.orders.length ? active.orders[0].id : '';
+      render(active);
+    }
+  }
+
+  function exportTemplates(ctx, all) {
+    if (draft.saving || collectionBusy) return Promise.resolve();
+    // Export persisted templates, saving the current draft first when needed.
+    var dirty = isDirty();
+    var prepare = dirty ? doSave(ctx) : Promise.resolve();
+    collectionBusy = true; refreshUI(ctx);
+    return prepare.then(function () {
+      if (dirty && (draft.status === 'error' || isDirty())) throw new Error(draft.error || t(draft.errorKey || 'doc.statusDirty'));
+      var path = '/print/document-templates/export' + (all ? '' : '?template_id=' + encodeURIComponent(draft.templateId));
+      return apiFetch(path);
+    }).then(async function (res) {
+      if (!res.ok) throw await responseError(res);
+      var blob = await res.blob();
+      if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function' || typeof URL.revokeObjectURL !== 'function') throw new Error(t('common.requestFailed'));
+      var url = URL.createObjectURL(blob);
+      var link = el('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', all ? 'document-templates.json' : 'document-template.json');
+      ctx.root.appendChild(link);
+      try { link.click(); } finally {
+        link.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+      }
+    }).catch(function (err) { setError(err.message || String(err)); }).finally(function () { collectionBusy = false; refreshActive(); });
+  }
+
+  function importTemplates(ctx, file) {
+    if (!file || draft.saving || collectionBusy) return Promise.resolve();
+    if (isDirty() && !window.confirm(t('doc.discard'))) return Promise.resolve();
+    if (typeof FileReader === 'undefined') { setError('', 'doc.importInvalid'); return Promise.resolve(); }
+    var conflict = importConflict;
+    collectionBusy = true; refreshUI(ctx);
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        try { resolve(JSON.parse(String(reader.result || ''))); }
+        catch (_) { reject(new Error(t('doc.importInvalid'))); }
+      };
+      reader.onerror = reader.onabort = function () { reject(new Error(t('doc.importInvalid'))); };
+      reader.readAsText(file);
+    }).then(function (data) {
+      return api('/print/document-templates/import', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: data, on_conflict: conflict }),
+      });
+    }).then(function (result) {
+      adoptCollection(result.settings);
+      draft.status = 'imported'; draft.imported = result.imported;
+    }).catch(function (err) { setError(err.message || String(err), err.message === t('doc.importInvalid') ? 'doc.importInvalid' : null); }).finally(function () { collectionBusy = false; refreshActive(); });
   }
 
   function render(ctx) {
@@ -603,7 +669,26 @@ var DocumentEditor = (function () {
     duplicate.addEventListener('click', function () { return collectionAction(ctx, 'duplicate', draft.templateId); });
     var deleteTemplate = el('button', 'editor-template-delete'); deleteTemplate.setAttribute('type', 'button'); setText(deleteTemplate, 'doc.deleteTemplate');
     deleteTemplate.addEventListener('click', function () { return collectionAction(ctx, 'delete', draft.templateId); });
-    [templateSelect, duplicate, deleteTemplate].forEach(function (node) { collection.appendChild(node); }); templateWrap.appendChild(collection);
+    var exportCurrent = el('button', 'editor-template-export'); exportCurrent.setAttribute('type', 'button'); setText(exportCurrent, 'doc.export');
+    exportCurrent.addEventListener('click', function () { return exportTemplates(ctx, false); });
+    var exportAll = el('button', 'editor-template-export-all'); exportAll.setAttribute('type', 'button'); setText(exportAll, 'doc.exportAll');
+    exportAll.addEventListener('click', function () { return exportTemplates(ctx, true); });
+    var conflict = el('select', 'editor-import-conflict'); labelControl(conflict, 'doc.importConflict');
+    [['rename', 'doc.importRename'], ['overwrite', 'doc.importOverwrite']].forEach(function (pair) {
+      var option = el('option'); option.value = pair[0]; setText(option, pair[1]); conflict.appendChild(option);
+    });
+    conflict.value = importConflict;
+    conflict.addEventListener('change', function () { if (!draft.saving && !collectionBusy) importConflict = conflict.value === 'overwrite' ? 'overwrite' : 'rename'; });
+    var importFile = el('input', 'editor-template-import-file');
+    importFile.setAttribute('type', 'file'); importFile.setAttribute('accept', '.json,application/json'); importFile.setAttribute('hidden', ''); labelControl(importFile, 'doc.import');
+    importFile.addEventListener('change', function () {
+      var file = importFile.files && importFile.files[0]; importFile.value = '';
+      return importTemplates(ctx, file);
+    });
+    var importButton = el('button', 'editor-template-import'); importButton.setAttribute('type', 'button'); setText(importButton, 'doc.import');
+    importButton.addEventListener('click', function () { if (!draft.saving && !collectionBusy) importFile.click(); });
+    var collectionControls = [templateSelect, duplicate, deleteTemplate, exportCurrent, exportAll, conflict, importButton, importFile];
+    collectionControls.forEach(function (node) { collection.appendChild(node); }); templateWrap.appendChild(collection);
     var nameLabel = el('label', 'editor-label');
     setText(nameLabel, 'doc.templateName');
     nameLabel.setAttribute('for', 'document-template-name');
@@ -700,7 +785,7 @@ var DocumentEditor = (function () {
     if (ctx.root && ctx.root.parentNode) ctx.root.remove();
     ctx.container.appendChild(root);
     ctx.root = root;
-    ctx.ui = { statusNode: statusNode, noteNode: noteNode, saveBtn: saveBtn, previewBtn: previewBtn, canvasNodes: canvasUI.nodes, warnings: warnings, collectionControls: [templateSelect, duplicate, deleteTemplate] };
+    ctx.ui = { statusNode: statusNode, noteNode: noteNode, saveBtn: saveBtn, previewBtn: previewBtn, canvasNodes: canvasUI.nodes, warnings: warnings, collectionControls: collectionControls };
     refreshUI(ctx);
   }
 
@@ -761,6 +846,7 @@ var DocumentEditor = (function () {
   }
 
   function doPreview(ctx) {
+    if (collectionBusy) return Promise.resolve();
     var blocked = templateBlockedReason();
     if (!ctx.orders.length || !draft.previewOrderId || !hasContent() || blocked) return Promise.resolve();
     var body = JSON.stringify({ order_id: draft.previewOrderId, template: buildTemplate() });

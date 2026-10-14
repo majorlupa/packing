@@ -60,7 +60,9 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
             content={"detail": t("setup.invalid_credentials_bounded")},
             headers={"Cache-Control": "no-store"},
         )
-    if request.url.path in ("/api/print/document-settings", "/api/print/document-preview"):
+    if request.url.path in (
+        "/api/print/document-settings", "/api/print/document-preview", "/api/print/document-templates/import",
+    ):
         # Do not echo a logo's base64 payload or operator-authored document text.
         messages = []
         for error in exc.errors():

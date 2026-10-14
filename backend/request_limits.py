@@ -7,6 +7,9 @@ BODY_LIMITS = {
     # Room for a 2.8 MB base64 logo plus text and JSON encoding overhead.
     "/api/print/document-settings": 4 * 1024 * 1024,
     "/api/print/document-preview": 4 * 1024 * 1024,
+    # Batch imports (up to 10 templates) need room for logos and JSON overhead;
+    # cap the entire file at 12 MiB before parsing, independently of per-template limits.
+    "/api/print/document-templates/import": 4 * 1024 * 1024 * 3,
     # The existing 20 MiB PDF limit still applies; allow multipart overhead.
     "/api/print/custom-doc": 21 * 1024 * 1024,
 }

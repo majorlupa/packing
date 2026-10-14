@@ -85,6 +85,22 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "Choose a parcel size (A, B or C) for the InPost parcel locker.",
     },
     # --- printing / documents ---
+    "document.import_format": {
+        "pl": "Nieprawidłowy format pliku szablonów.",
+        "en": "Invalid template file format.",
+    },
+    "document.import_version": {
+        "pl": "Nieobsługiwana wersja pliku szablonów.",
+        "en": "Unsupported template file version.",
+    },
+    "document.import_limit": {
+        "pl": "Import przekroczyłby limit 10 szablonów.",
+        "en": "Import would exceed the limit of 10 templates.",
+    },
+    "document.import_duplicate_names": {
+        "pl": "Nazwy szablonów w pliku nie mogą się powtarzać.",
+        "en": "Template names in the file must be unique.",
+    },
     "document.invalid_template": {
         "pl": "Sprawdź nazwę szablonu, bloki i ich ustawienia (rozmiar tekstu 8–36).",
         "en": "Check the template name, blocks and their settings (text size 8–36).",
