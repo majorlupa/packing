@@ -10,19 +10,21 @@ import io
 import os
 import shutil
 import threading
+import uuid
 from datetime import date
 from pathlib import Path
 
+import api.allegro as allegro
 import httpx
-from fastapi import APIRouter, HTTPException, UploadFile, File, Query
+import store
+from api.allegro import to_http_exception
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from jinja2 import Environment, FileSystemLoader
-from pydantic import BaseModel, Field
-
-import store
-import api.allegro as allegro
-from api.allegro import to_http_exception
 from localization import current_language, date_format, t
+from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
+
 from routes.documents import active_template, has_content, personalized_pdf
 
 router = APIRouter(prefix="/print", tags=["print"])
@@ -32,6 +34,7 @@ _jinja = Environment(loader=FileSystemLoader(TEMPLATES_DIR), autoescape=True)
 
 CUSTOM_DOC_PATH: Path = store.DATA_DIR / "custom_doc.pdf"
 MAX_CUSTOM_DOC_BYTES = 20 * 1024 * 1024
+_CUSTOM_DOC_LOCK = threading.Lock()
 
 # One lock per (event loop, order): two "print label" requests for the same order must not
 # each create a shipment at Allegro (a shipment costs money and can only be created once).
@@ -160,26 +163,28 @@ INPOST_LOCKER_SIZES = {
 }
 
 
-@router.get("/orders/{order_id}/label")
-async def print_label(
+@router.post("/orders/{order_id}/label")
+async def create_label(
     order_id: str,
     length: float | None = Query(None, gt=0, le=500),
     width: float | None = Query(None, gt=0, le=500),
     height: float | None = Query(None, gt=0, le=500),
     weight: float | None = Query(None, gt=0, le=100),
 ):
-    """Create the shipment once (if needed) and return the label PDF.
+    """Create the shipment once, recording its command before contacting Allegro.
 
     Dimensions come from the shipping settings unless this request overrides them.
     For InPost lockers, dimensions are derived from the order's parcel_size (A/B/C).
     Serialised per order so a double click cannot create two shipments.
     """
     async with _order_lock(order_id):
-        order = store.get_order(order_id)
+        order = await run_in_threadpool(store.get_order, order_id)
         if order is None:
             raise HTTPException(status_code=404, detail=t("error.order_not_found"))
+        if order.shipment_id:
+            return {"shipment_id": order.shipment_id}
 
-        settings = store.get_shipment_settings()
+        settings = await run_in_threadpool(store.get_shipment_settings)
         package = dict(settings["package"])
         for key, value in (("length", length), ("width", width), ("height", height), ("weight", weight)):
             if value is not None:
@@ -205,8 +210,27 @@ async def print_label(
             tracking_number = order.tracking_number
             created_now = False
             if not shipment_id:
-                shipment_id = await allegro.create_shipment(order, settings["sender"], package)
+                def remember_command(state):
+                    stored = state["orders"].get(order_id)
+                    if stored is None:
+                        raise HTTPException(status_code=404, detail=t("error.order_not_found"))
+                    if not stored.get("shipment_command_id"):
+                        stored["shipment_command_id"] = str(uuid.uuid4())
+                    return stored["shipment_command_id"]
+
+                command_id = await run_in_threadpool(store.transact, remember_command)
+                shipment_id = await allegro.create_shipment(
+                    order, settings["sender"], package, command_id=command_id,
+                )
                 created_now = True
+                # Persist the paid shipment before even attempting tracking lookup.
+                def remember_id(state):
+                    stored = state["orders"].get(order_id)
+                    if stored is not None:
+                        stored["shipment_id"] = shipment_id
+                        stored["shipment_command_id"] = None
+
+                await run_in_threadpool(store.transact, remember_id)
                 tracking_number = await allegro.get_shipment_tracking(shipment_id)
             elif not tracking_number:
                 # The shipment exists but the waybill was never stored — either
@@ -230,15 +254,29 @@ async def print_label(
                         if tracking_number:
                             stored["tracking_number"] = tracking_number
 
-                store.transact(remember_shipment)
+                await run_in_threadpool(store.transact, remember_shipment)
 
-            label_bytes = await allegro.download_label(shipment_id, package.get("page_size", "A6"))
-        except allegro.AllegroError as exc:
-            raise to_http_exception(exc)
-        except httpx.HTTPError as exc:
-            raise HTTPException(status_code=502, detail=t("common.allegro_unreachable", error=exc))
 
-    return Response(content=label_bytes, media_type="application/pdf")
+        except (allegro.AllegroError, httpx.HTTPError) as exc:
+            raise to_http_exception(exc) from exc
+
+    return {"shipment_id": shipment_id, "tracking_number": tracking_number}
+
+
+@router.get("/orders/{order_id}/label")
+async def print_label(order_id: str):
+    """Download only; safe GET requests must never buy shipments."""
+    order = await run_in_threadpool(store.get_order, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail=t("error.order_not_found"))
+    if not order.shipment_id:
+        raise HTTPException(status_code=409, detail="Shipment has not been created.")
+    settings = await run_in_threadpool(store.get_shipment_settings)
+    try:
+        label_bytes = await allegro.download_label(order.shipment_id, settings["package"].get("page_size", "A6"))
+    except (allegro.AllegroError, httpx.HTTPError) as exc:
+        raise to_http_exception(exc) from exc
+    return Response(content=label_bytes, media_type="application/pdf", headers={"Cache-Control": "no-store"})
 
 
 @router.get("/orders/{order_id}/shipment")
@@ -249,7 +287,7 @@ async def shipment_info(order_id: str):
     shipment exists but the number was never stored, fetch it once and persist
     it, so re-opening the packing card does not have to wait for Allegro again.
     """
-    order = store.get_order(order_id)
+    order = await run_in_threadpool(store.get_order, order_id)
     if order is None:
         raise HTTPException(status_code=404, detail=t("error.order_not_found"))
     tracking_number = order.tracking_number
@@ -264,12 +302,12 @@ async def shipment_info(order_id: str):
                 if stored is not None and not stored.get("tracking_number"):
                     stored["tracking_number"] = tracking_number
 
-            store.transact(remember_tracking)
+            await run_in_threadpool(store.transact, remember_tracking)
     return {"shipment_id": order.shipment_id, "tracking_number": tracking_number}
 
 
 @router.get("/orders/{order_id}/invoice")
-async def print_invoice(order_id: str):
+def print_invoice(order_id: str):
     """Return a sales document HTML — browser opens it and auto-prints."""
     html = _build_invoice_html(order_id)
     return Response(content=html, media_type="text/html")
@@ -289,7 +327,7 @@ def print_sales_document(order_id: str):
 def print_combined(order_id: str):
     """Invoice + selected custom doc merged into one PDF (render off the event loop)."""
     import weasyprint
-    from pypdf import PdfWriter, PdfReader
+    from pypdf import PdfReader, PdfWriter
 
     html = _build_invoice_html(order_id)
     invoice_pdf = weasyprint.HTML(string=html).write_pdf()
@@ -335,7 +373,8 @@ def custom_doc_info():
 
 
 @router.post("/custom-doc")
-async def upload_custom_doc(file: UploadFile = File(...)):
+# FastAPI uses File metadata in the default to declare a required multipart field.
+async def upload_custom_doc(file: UploadFile = File(...)):  # noqa: B008
     if not (file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail=t("print.pdf_required"))
     payload = await file.read(MAX_CUSTOM_DOC_BYTES + 1)
@@ -343,6 +382,11 @@ async def upload_custom_doc(file: UploadFile = File(...)):
         raise HTTPException(status_code=413, detail=t("print.file_too_large"))
     if not payload.startswith(b"%PDF-"):
         raise HTTPException(status_code=400, detail=t("print.not_a_pdf"))
+    return await run_in_threadpool(_save_custom_doc, payload)
+
+
+def _save_custom_doc(payload: bytes):
+    """Validate and persist the upload without blocking the event loop."""
     from pypdf import PdfReader
     try:
         reader = PdfReader(io.BytesIO(payload))
@@ -352,13 +396,14 @@ async def upload_custom_doc(file: UploadFile = File(...)):
             _ = page.mediabox
     except Exception as exc:
         raise HTTPException(status_code=400, detail=t("print.not_a_pdf")) from exc
-    CUSTOM_DOC_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = CUSTOM_DOC_PATH.with_name(CUSTOM_DOC_PATH.name + ".tmp")
-    with open(tmp, "wb") as handle:
-        handle.write(payload)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(tmp, CUSTOM_DOC_PATH)
+    with _CUSTOM_DOC_LOCK:
+        CUSTOM_DOC_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = CUSTOM_DOC_PATH.with_name(CUSTOM_DOC_PATH.name + ".tmp")
+        with open(tmp, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, CUSTOM_DOC_PATH)
     return {"status": "uploaded"}
 
 

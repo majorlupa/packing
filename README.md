@@ -134,6 +134,91 @@ wewnątrz kontenera. Dzięki temu plik pozostaje źródłem konfiguracji po rest
 i aktualizacjach. Zachowaj uprawnienia `0600` i nie dodawaj go do kontroli wersji.
 Port aplikacji jest dostępny wyłącznie na localhost.
 
+### Kopia zapasowa i przywracanie
+
+`./data` zawiera zamówienia, listy kompletowania, archiwum, ustawienia i szablony
+dokumentów (`state.json` i kopie), tokeny OAuth Allegro (`allegro_token.json`)
+oraz wgrany PDF (`custom_doc.pdf`). Z katalogu projektu:
+
+```sh
+docker compose stop packing
+tar -czf data-backup.tar.gz data   # albo skopiuj cały katalog ./data
+docker compose up -d
+```
+
+Przywracanie (zachowaj obecny katalog pod nieużywaną nazwą):
+
+```sh
+docker compose stop packing
+mv data data.before-restore
+tar -xzf data-backup.tar.gz
+sudo chown -R 1000:1000 data
+docker compose up -d
+```
+
+Kontener działa jako UID/GID `1000:1000`; katalog musi być dla niego zapisywalny.
+Osobno zachowaj `.env` (konfiguracja i token dostępu), z właścicielem `1000:1000`
+i uprawnieniami `0600`. Chroń obie kopie: zawierają dane klientów i sekrety.
+
+### Aktualizacje
+
+Najpierw wykonaj kopię `data` i `.env`. Przy czystym drzewie roboczym:
+
+```sh
+previous=$(git rev-parse HEAD)   # zachowaj ten identyfikator do wycofania aktualizacji
+git pull
+docker compose build --pull
+docker compose up -d
+curl --fail http://127.0.0.1:3001/health
+```
+
+Jeśli kontrola nie przejdzie, sprawdź `docker compose logs packing`.
+Aby wycofać: `git switch --detach "$previous"`, następnie ponownie
+`docker compose build --pull` i `docker compose up -d`; sprawdź `/health`.
+Jeśli zmienił się format danych, przed uruchomieniem starej wersji przywróć kopię
+według instrukcji powyżej. Powrót na gałąź: `git switch -`.
+
+### Reverse proxy i TLS
+
+Compose udostępnia `127.0.0.1:3001:3001`. Poniższe przykłady zakładają proxy na
+tym samym hoście. Zastąp domenę i ścieżki certyfikatów; skieruj DNS na serwer
+i udostępnij porty 80/443. Ustaw `ALLEGRO_REDIRECT_URI` w `.env` na
+`https://packing.example.com/api/orders/auth/callback`, zarejestruj ten sam adres
+w Allegro i odtwórz kontener (`docker compose up -d --force-recreate packing`).
+
+nginx (certyfikat TLS należy uzyskać osobno; 25 MB pozwala wgrać PDF 20 MB):
+
+```nginx
+server {
+    listen 80;
+    server_name packing.example.com;
+    return 301 https://$host$request_uri;
+}
+server {
+    listen 443 ssl;
+    server_name packing.example.com;
+    ssl_certificate /etc/letsencrypt/live/packing.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/packing.example.com/privkey.pem;
+    client_max_body_size 25m;
+    location / {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+Caddy automatycznie uzyskuje TLS, przekierowuje HTTP na HTTPS, zachowuje `Host`
+i ustawia `X-Forwarded-For`, `X-Forwarded-Proto` oraz `X-Forwarded-Host`:
+
+```caddyfile
+packing.example.com {
+    reverse_proxy 127.0.0.1:3001
+}
+```
+
 ### Rozwój i testy
 
 ```sh
@@ -288,6 +373,91 @@ access token. See [`.env.example`](.env.example) for the optional ones
 The Compose service mounts `./data` for state and the host `.env` inside the container,
 so the file stays the single source of truth across restarts and updates. Keep it mode
 `0600` and out of version control. The web port is bound to localhost only.
+
+### Backup & restore
+
+`./data` holds orders, picking lists, archives, settings and document templates
+(`state.json` and backups), Allegro OAuth tokens (`allegro_token.json`), and the
+uploaded PDF (`custom_doc.pdf`). From the project directory:
+
+```sh
+docker compose stop packing
+tar -czf data-backup.tar.gz data   # or copy the entire ./data directory
+docker compose up -d
+```
+
+Restore (preserve the current directory under an unused name):
+
+```sh
+docker compose stop packing
+mv data data.before-restore
+tar -xzf data-backup.tar.gz
+sudo chown -R 1000:1000 data
+docker compose up -d
+```
+
+The container runs as UID/GID `1000:1000`; the directory must be writable by it.
+Back up `.env` separately (configuration and access token), keeping ownership
+`1000:1000` and mode `0600`. Protect both backups: they contain customer data and secrets.
+
+### Upgrading
+
+Back up `data` and `.env` first. With a clean working tree:
+
+```sh
+previous=$(git rev-parse HEAD)   # retain this revision for rollback
+git pull
+docker compose build --pull
+docker compose up -d
+curl --fail http://127.0.0.1:3001/health
+```
+
+If the check fails, inspect `docker compose logs packing`.
+To roll back: `git switch --detach "$previous"`, then rerun
+`docker compose build --pull` and `docker compose up -d`; check `/health` again.
+If the data format changed, restore the backup as above before starting the old
+version. Return to your branch with `git switch -`.
+
+### Running behind a reverse proxy
+
+Compose binds `127.0.0.1:3001:3001`. These examples assume a proxy on the same host.
+Replace the domain and certificate paths; point DNS to the server and expose
+ports 80/443. Set `ALLEGRO_REDIRECT_URI` in `.env` to
+`https://packing.example.com/api/orders/auth/callback`, register the same URL
+with Allegro, and recreate the container (`docker compose up -d --force-recreate packing`).
+
+nginx (obtain a TLS certificate separately; 25 MB accommodates a 20 MB PDF upload):
+
+```nginx
+server {
+    listen 80;
+    server_name packing.example.com;
+    return 301 https://$host$request_uri;
+}
+server {
+    listen 443 ssl;
+    server_name packing.example.com;
+    ssl_certificate /etc/letsencrypt/live/packing.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/packing.example.com/privkey.pem;
+    client_max_body_size 25m;
+    location / {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+Caddy automatically obtains TLS, redirects HTTP to HTTPS, preserves `Host`,
+and sets `X-Forwarded-For`, `X-Forwarded-Proto` and `X-Forwarded-Host`:
+
+```caddyfile
+packing.example.com {
+    reverse_proxy 127.0.0.1:3001
+}
+```
 
 ### Development
 

@@ -20,9 +20,37 @@ body {
 }
 
 #app {
+  position: relative;
   display: flex;
   height: 100vh;
 }
+
+/* Small, non-modal notifications stay inside the work panel, not the sidebar. */
+.toast-region {
+  position: absolute;
+  z-index: 100;
+  top: 16px;
+  right: 16px;
+  left: 236px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  pointer-events: none;
+}
+.toast {
+  max-width: min(420px, 100%);
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--accent2);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px #0005;
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.toast:empty { padding: 0; border: 0; box-shadow: none; }
+.toast-error { border-color: var(--accent); }
 
 /* ---- First-run onboarding ---- */
 .setup-shell {

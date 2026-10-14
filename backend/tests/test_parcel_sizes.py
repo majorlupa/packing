@@ -2,7 +2,6 @@
 import importlib
 
 import pytest
-
 from conftest import sample_order
 
 
@@ -51,11 +50,11 @@ def test_size_rejects_couriers_and_existing_shipments(app_env, client, overrides
 def test_new_locker_labels_require_parcel_size(app_env, client, monkeypatch):
     import api.allegro as allegro
     app_env.write_state(app_env.default_state({'o-1': sample_order(courier='Paczkomat InPost')}))
-    async def unexpected(*args):
+    async def unexpected(*args, **kwargs):
         pytest.fail('Locker order without size must not call carrier API')
     monkeypatch.setattr(allegro, 'create_shipment', unexpected)
     monkeypatch.setattr(allegro, 'download_label', unexpected)
-    response = client.get('/api/print/orders/o-1/label')
+    response = client.post('/api/print/orders/o-1/label')
     assert response.status_code == 400
     assert 'gabaryt' in response.json()['detail'].lower()
     assert app_env.store.get_order('o-1').shipment_id is None
@@ -67,7 +66,7 @@ def test_new_locker_labels_create_shipment_with_locker_dimensions(app_env, clien
         courier='Paczkomat InPost', parcel_size='A')}))
     called_package = {}
 
-    async def mock_create(order, sender, package):
+    async def mock_create(order, sender, package, *, command_id=None):
         called_package.update(package)
         return 'inpost-shipment-123'
 
@@ -81,9 +80,10 @@ def test_new_locker_labels_create_shipment_with_locker_dimensions(app_env, clien
     monkeypatch.setattr(allegro, 'get_shipment_tracking', mock_tracking)
     monkeypatch.setattr(allegro, 'download_label', mock_download)
 
-    response = client.get('/api/print/orders/o-1/label')
+    response = client.post('/api/print/orders/o-1/label')
     assert response.status_code == 200
-    assert response.content == b'%PDF-locker-label'
+    assert response.json() == {'shipment_id': 'inpost-shipment-123', 'tracking_number': 'INP-TRACK-999'}
+    assert client.get('/api/print/orders/o-1/label').content == b'%PDF-locker-label'
     assert called_package['length'] == 64.0
     assert called_package['width'] == 38.0
     assert called_package['height'] == 8.0
@@ -99,7 +99,7 @@ def test_existing_locker_label_remains_downloadable(app_env, client, monkeypatch
     async def download(shipment_id, page_size):
         assert shipment_id == 'existing-shipment'
         return b'%PDF-saved'
-    async def unexpected(*args):
+    async def unexpected(*args, **kwargs):
         pytest.fail('Existing shipment must not be recreated')
     monkeypatch.setattr(allegro, 'create_shipment', unexpected)
     monkeypatch.setattr(allegro, 'download_label', download)

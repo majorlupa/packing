@@ -1,19 +1,18 @@
-import hmac
 import logging
 import os
 import secrets
+import threading
 import time
 from html import escape
 
+import api.allegro as allegro
+import httpx
+import store
+from api.allegro import to_http_exception
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from typing import List
-import httpx
-
-import store
-import api.allegro as allegro
-from api.allegro import to_http_exception
-from localization import DEFAULT_LANGUAGE, negotiate_language, t
+from localization import negotiate_language, t
+from starlette.concurrency import run_in_threadpool
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 logger = logging.getLogger("packing.orders")
@@ -30,12 +29,16 @@ BACKFILL_FIELDS = (
 )
 
 UI_BASE_URL = os.getenv("PACKING_BASE_URL", "http://localhost:3001")
-_oauth_state: str | None = None
-_oauth_state_deadline = 0.0
-# The language chosen when the operator started the OAuth flow, so the callback
-# page (a plain browser navigation, possibly with a different Accept-Language)
-# answers in the language the operator actually chose. Cleared with the state.
-_oauth_language: str = DEFAULT_LANGUAGE
+# Each pending flow carries its own language and expires after ten minutes.
+_oauth_states: dict[str, tuple[str, float]] = {}
+_oauth_states_lock = threading.Lock()
+
+
+def _prune_oauth_states(now: float) -> None:
+    """Called with the state lock held."""
+    for state, (_, deadline) in list(_oauth_states.items()):
+        if now > deadline:
+            del _oauth_states[state]
 
 # Browser-facing page for a failed authorization. The message comes from a query
 # parameter, so it is HTML-escaped — never injected as markup.
@@ -78,15 +81,15 @@ def _oauth_error_page(language: str, message: str, status_code: int = 400) -> HT
     return HTMLResponse(content=html, status_code=status_code, headers={"Cache-Control": "no-store"})
 
 
-@router.get("/", response_model=List[dict])
-async def list_orders():
+@router.get("/", response_model=list[dict])
+def list_orders():
     orders = store.get_orders()
     return [{**o.model_dump(), "delivery_type": "inpost_locker" if o.is_inpost_locker else "courier"}
             for o in orders.values()]
 
 
 @router.get("/status")
-async def state_status():
+def state_status():
     """Health of the state file: whether records had to be skipped or repaired.
 
     ``dry_run`` travels with it so the browser only offers test-only actions
@@ -106,15 +109,13 @@ async def sync_from_allegro():
         # dry run. Any other upstream failure must reach the operator: silently
         # substituting three fake orders for a real sync would hide a broken
         # Allegro connection behind a healthy-looking "added: 3".
-        if allegro.dry_run_enabled() and not allegro.is_authorized():
-            logger.warning("Brak autoryzacji Allegro w trybie dry run: używam zamówień testowych.")
+        if allegro.dry_run_enabled() and not await run_in_threadpool(allegro.is_authorized):
+            logger.warning("No Allegro authorization in dry-run mode: using test orders.")
             new_orders = allegro._generate_mock_orders()
         else:
-            raise to_http_exception(exc)
+            raise to_http_exception(exc) from exc
     except (allegro.AllegroError, httpx.HTTPError) as exc:
-        if isinstance(exc, allegro.AllegroError):
-            raise to_http_exception(exc)
-        raise HTTPException(status_code=502, detail=t("common.allegro_unreachable", error=exc))
+        raise to_http_exception(exc) from exc
 
     def mutate(state):
         # Read the archive inside the transaction: a concurrent "end of day" must not be missed.
@@ -142,12 +143,13 @@ async def sync_from_allegro():
                 updated += 1
         return added, updated
 
-    added, updated = store.transact(mutate)
-    return {"added": added, "updated": updated, "total": len(store.get_orders())}
+    added, updated = await run_in_threadpool(store.transact, mutate)
+    orders = await run_in_threadpool(store.get_orders)
+    return {"added": added, "updated": updated, "total": len(orders)}
 
 
 @router.post("/seed-mock")
-async def seed_mock_orders():
+def seed_mock_orders():
     """Seed sample test orders into the queue.
 
     Dry-run only. These records carry fabricated Allegro ids, so they cannot be
@@ -178,14 +180,14 @@ async def seed_mock_orders():
 
 
 @router.post("/zakoncz-dzien")
-async def zakoncz_dzien():
+def zakoncz_dzien():
     """Archive all done orders (tombstone their allegro_ids) and remove them from state."""
     archived = store.archive_done_orders()
     return {"archived": archived}
 
 
 @router.get("/archive")
-async def get_archive():
+def get_archive():
     """Archived orders as [{allegro_id, archived_at}, ...]."""
     return store.get_archive()
 
@@ -194,19 +196,21 @@ async def get_archive():
 
 
 @router.get("/auth/status")
-async def auth_status():
+def auth_status():
     return {"authorized": allegro.is_authorized()}
 
 
 @router.get("/auth/url")
-async def auth_url(request: Request):
-    global _oauth_state, _oauth_state_deadline, _oauth_language
-    _oauth_state = secrets.token_urlsafe(32)
-    _oauth_state_deadline = time.monotonic() + 600
+def auth_url(request: Request):
+    state = secrets.token_urlsafe(32)
     # Remember the language of the request that started the flow: the callback
     # is a browser navigation and may arrive with a different Accept-Language.
-    _oauth_language = negotiate_language(request.headers.get("accept-language"))
-    return {"url": allegro.auth_url(_oauth_state)}
+    language = negotiate_language(request.headers.get("accept-language"))
+    with _oauth_states_lock:
+        now = time.monotonic()
+        _prune_oauth_states(now)
+        _oauth_states[state] = (language, now + 600)
+    return {"url": allegro.auth_url(state)}
 
 
 @router.get("/auth/callback")
@@ -216,32 +220,22 @@ async def auth_callback(
     state: str | None = None,
     error: str | None = None,
 ):
-    global _oauth_state, _oauth_state_deadline, _oauth_language
-    if (
-        not state
-        or not _oauth_state
-        or time.monotonic() > _oauth_state_deadline
-        or not hmac.compare_digest(
-            state.encode("utf-8"), _oauth_state.encode("utf-8")
-        )
-    ):
+    with _oauth_states_lock:
+        _prune_oauth_states(time.monotonic())
+        flow = _oauth_states.pop(state, None) if state else None
+    if flow is None:
         # No valid flow to take a language from: use this request's own header.
         language = negotiate_language(request.headers.get("accept-language"))
         return _oauth_error_page(language, t("oauth.invalid_state", lang=language))
 
     # From here the flow is genuine: answer in the language it was started with.
-    language = _oauth_language
-    _oauth_state = None
-    _oauth_state_deadline = 0.0
-    _oauth_language = DEFAULT_LANGUAGE
+    language, _ = flow
     if error:
         return _oauth_error_page(language, t("oauth.rejected", lang=language, error=error))
     if not code:
         return _oauth_error_page(language, t("oauth.missing_code", lang=language))
     try:
         await allegro.exchange_code(code)
-    except allegro.AllegroError as exc:
-        raise to_http_exception(exc)
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=t("common.allegro_unreachable", error=exc))
+    except (allegro.AllegroError, httpx.HTTPError) as exc:
+        raise to_http_exception(exc, lang=language) from exc
     return RedirectResponse(f"{UI_BASE_URL}/")

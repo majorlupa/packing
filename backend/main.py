@@ -5,24 +5,25 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import configuration
 from fastapi import APIRouter, FastAPI, Request
-from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
-
-import configuration
 
 configuration.load_environment()
 
 import store
 from localization import current_language, negotiate_language, t
-from routes.orders import router as orders_router
-from routes.queue import router as queue_router
-from routes.print_routes import router as print_router
+from request_limits import RequestBodyLimitMiddleware
 from routes.documents import router as documents_router
-from routes.setup import router as setup_router, is_configured, requires_access_token
+from routes.orders import router as orders_router
+from routes.print_routes import router as print_router
+from routes.queue import router as queue_router
+from routes.setup import is_configured, requires_access_token
+from routes.setup import router as setup_router
 
 logger = logging.getLogger("packing")
 
@@ -46,6 +47,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Packing App", lifespan=lifespan)
+app.add_middleware(RequestBodyLimitMiddleware)
 
 
 @app.exception_handler(RequestValidationError)
@@ -58,7 +60,9 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
             content={"detail": t("setup.invalid_credentials_bounded")},
             headers={"Cache-Control": "no-store"},
         )
-    if request.url.path in ("/api/print/document-settings", "/api/print/document-preview"):
+    if request.url.path in (
+        "/api/print/document-settings", "/api/print/document-preview", "/api/print/document-templates/import",
+    ):
         # Do not echo a logo's base64 payload or operator-authored document text.
         messages = []
         for error in exc.errors():

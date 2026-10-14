@@ -14,16 +14,16 @@ Durability rules:
 import json
 import os
 import threading
+from collections.abc import Callable
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, TypeVar
+from typing import TypeVar
 
-from pydantic import ValidationError
-
+from documents import DocumentSettings, default_document_settings
 from localization import t
 from models.order import Order, PickingList
-from documents import DocumentSettings, default_document_settings
+from pydantic import ValidationError
 
 DATA_DIR = Path(os.getenv("PACKING_DATA_DIR", "/app/data"))
 DATA_FILE = DATA_DIR / "state.json"
@@ -74,7 +74,7 @@ class StateError(RuntimeError):
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _default_state() -> dict:
@@ -114,7 +114,7 @@ def _normalise(raw: object) -> dict:
         raise StateError(t("store.state_not_object", path=DATA_FILE))
 
     state = _default_state()
-    quarantine: List[dict] = [q for q in (raw.get("quarantine") or []) if isinstance(q, dict)][:_MAX_QUARANTINE]
+    quarantine: list[dict] = [q for q in (raw.get("quarantine") or []) if isinstance(q, dict)][:_MAX_QUARANTINE]
 
     raw_orders = raw.get("orders")
     if isinstance(raw_orders, dict):
@@ -124,7 +124,9 @@ def _normalise(raw: object) -> dict:
             except (ValidationError, TypeError) as exc:
                 quarantine.append({"kind": "order", "id": key, "error": str(exc)[:500], "record": value})
     elif raw_orders not in (None, {}):
-        quarantine.append({"kind": "orders-collection", "id": "orders", "error": t("store.orders_collection"), "record": None})
+        quarantine.append({
+            "kind": "orders-collection", "id": "orders", "error": t("store.orders_collection"), "record": None,
+        })
 
     counter = raw.get("picking_list_counter")
     state["picking_list_counter"] = counter if isinstance(counter, int) and counter >= 0 else 0
@@ -199,7 +201,8 @@ def _load() -> dict:
 
     try:
         return _normalise(json.loads(DATA_FILE.read_text(encoding="utf-8")))
-    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError, StateError) as exc:
+        # Valid JSON with an invalid root shape needs the same backup recovery.
         if not BACKUP_FILE.exists():
             raise StateError(
                 t("store.unreadable_no_backup", path=DATA_FILE, exc=exc)
@@ -254,18 +257,18 @@ def state_status() -> dict:
 # ---- Orders ----
 
 
-def get_orders() -> Dict[str, Order]:
+def get_orders() -> dict[str, Order]:
     with _LOCK:
         return {k: Order(**v) for k, v in _load()["orders"].items()}
 
 
-def get_order(order_id: str) -> Optional[Order]:
+def get_order(order_id: str) -> Order | None:
     with _LOCK:
         data = _load()["orders"].get(order_id)
         return Order(**data) if data else None
 
 
-def get_order_by_allegro_id(allegro_id: str) -> Optional[Order]:
+def get_order_by_allegro_id(allegro_id: str) -> Order | None:
     with _LOCK:
         for data in _load()["orders"].values():
             if data.get("allegro_id") == allegro_id:
@@ -280,7 +283,7 @@ def save_order(order: Order) -> None:
     transact(mutate)
 
 
-def save_orders(orders: List[Order]) -> None:
+def save_orders(orders: list[Order]) -> None:
     def mutate(state):
         for order in orders:
             state["orders"][order.id] = order.model_dump(mode="json")
@@ -291,12 +294,12 @@ def save_orders(orders: List[Order]) -> None:
 # ---- Picking lists ----
 
 
-def get_picking_lists() -> Dict[str, PickingList]:
+def get_picking_lists() -> dict[str, PickingList]:
     with _LOCK:
         return {k: PickingList(**v) for k, v in _load()["picking_lists"].items()}
 
 
-def get_picking_list(pl_id: str) -> Optional[PickingList]:
+def get_picking_list(pl_id: str) -> PickingList | None:
     with _LOCK:
         data = _load()["picking_lists"].get(pl_id)
         return PickingList(**data) if data else None
@@ -327,7 +330,7 @@ def next_picking_list_number() -> int:
 # ---- Archive ----
 
 
-def get_archive() -> List[dict]:
+def get_archive() -> list[dict]:
     with _LOCK:
         return [dict(entry) for entry in _load()["archive"]]
 
@@ -347,7 +350,7 @@ def archive_done_orders() -> int:
 
         state["orders"] = {k: v for k, v in state["orders"].items() if k not in done_ids}
 
-        cleaned: Dict[str, dict] = {}
+        cleaned: dict[str, dict] = {}
         for pl_id, pl in state["picking_lists"].items():
             remaining = [oid for oid in pl["order_ids"] if oid not in done_ids]
             if remaining:

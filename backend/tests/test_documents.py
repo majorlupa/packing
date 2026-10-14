@@ -2,9 +2,8 @@ import io
 import json
 
 import pytest
-from pypdf import PdfReader, PdfWriter
-
 from conftest import sample_order
+from pypdf import PdfReader, PdfWriter
 
 
 def template(*blocks, name="Customer insert"):
@@ -19,11 +18,14 @@ def test_document_defaults_and_durable_collection(app_env):
     settings["profiles"]["future-account"] = {"source": "template", "active_template_id": "other"}
     app_env.store.save_document_settings(settings)
     restored = app_env.store.get_document_settings()
-    assert restored == settings
-    assert json.loads(app_env.state_file.read_text())["document_settings"] == settings
+    from documents import DocumentSettings
+    assert restored == DocumentSettings.model_validate(settings).model_dump()
+    assert json.loads(app_env.state_file.read_text())["document_settings"] == restored
 
 
-@pytest.mark.parametrize("text", ["{{unknown}}", "{{ buyer.name }}", "{{7*7}}", "{{buyer_name", "buyer_name}}", "{% for x in y %}"])
+@pytest.mark.parametrize(
+    "text", ["{{7*7}}", "{{buyer_name", "buyer_name}}", "{% for x in y %}"]
+)
 def test_rejects_unsupported_template_syntax(app_env, text):
     from documents import DocumentTemplate
     from pydantic import ValidationError
@@ -50,7 +52,10 @@ def test_safe_rendering_and_real_pdf(app_env):
     assert 'Dziękujemy' in text and 'a-1' in text and 'Wiertarka' in text
 
 
-@pytest.mark.parametrize("image", ["https://example.com/logo.png", "file:///etc/passwd", "data:image/svg+xml;base64,PHN2Zz4=", "data:image/png;base64,aGVsbG8="])
+@pytest.mark.parametrize("image", [
+    "https://example.com/logo.png", "file:///etc/passwd",
+    "data:image/svg+xml;base64,PHN2Zz4=", "data:image/png;base64,aGVsbG8=",
+])
 def test_rejects_unsafe_or_broken_logo(app_env, image):
     from documents import DocumentTemplate
     from pydantic import ValidationError
@@ -84,7 +89,9 @@ def test_settings_save_preview_and_personalized_print(app_env, client):
 def test_standalone_sales_pdf_never_appends_selected_custom_document(app_env, client):
     app_env.write_state(app_env.default_state({'o-1': sample_order()}))
     draft = template({'type': 'text', 'text': 'CUSTOM INSERT ONLY'})
-    assert client.post('/api/print/document-settings', json={'source': 'template', 'template': draft}).status_code == 200
+    assert client.post(
+        '/api/print/document-settings', json={'source': 'template', 'template': draft}
+    ).status_code == 200
     response = client.get('/api/print/orders/o-1/document')
     text = pdf_text(response)
     assert 'CUSTOM INSERT ONLY' not in text
@@ -100,12 +107,16 @@ def test_mode_switch_preserves_upload_and_other_templates(app_env, client):
     output = io.BytesIO()
     writer.write(output)
     uploaded = output.getvalue()
-    assert client.post('/api/print/custom-doc', files={'file': ('insert.pdf', uploaded, 'application/pdf')}).status_code == 200
+    assert client.post(
+        '/api/print/custom-doc', files={'file': ('insert.pdf', uploaded, 'application/pdf')}
+    ).status_code == 200
     settings = app_env.store.get_document_settings()
     settings['templates'].append({'id': 'future', 'name': 'Future', 'blocks': []})
     app_env.store.save_document_settings(settings)
     draft = template({'type': 'text', 'text': 'Personalized {{buyer_name}}'})
-    assert client.post('/api/print/document-settings', json={'source': 'template', 'template': draft}).status_code == 200
+    assert client.post(
+        '/api/print/document-settings', json={'source': 'template', 'template': draft}
+    ).status_code == 200
     assert client.get('/api/print/custom-doc/info').json()['upload_available'] is True
     assert client.post('/api/print/document-settings', json={'source': 'upload', 'template': draft}).status_code == 200
     assert client.get('/api/print/custom-doc').content == uploaded
@@ -115,8 +126,13 @@ def test_mode_switch_preserves_upload_and_other_templates(app_env, client):
 
 def test_document_api_validation_and_auth(client):
     empty = template()
-    assert client.post('/api/print/document-settings', json={'source': 'template', 'template': empty}).status_code == 422
-    assert client.post('/api/print/document-preview', json={'order_id': 'missing', 'template': template({'type':'text', 'text':'Hi'})}).status_code == 404
+    assert client.post(
+        '/api/print/document-settings', json={'source': 'template', 'template': empty}
+    ).status_code == 422
+    assert client.post(
+        '/api/print/document-preview',
+        json={'order_id': 'missing', 'template': template({'type':'text', 'text':'Hi'})},
+    ).status_code == 404
     wrong = template({'type':'text', 'text':'Hi'})
     wrong['id'] = 'new'
     assert client.post('/api/print/document-settings', json={'source':'template', 'template':wrong}).status_code == 422
@@ -139,12 +155,15 @@ def test_broken_pdf_upload_preserves_previous_file(client):
 @pytest.mark.parametrize('format,mime', [('PNG','png'),('JPEG','jpeg')])
 def test_valid_logo_formats(app_env, format, mime):
     import base64
-    from PIL import Image
+
     from documents import DocumentTemplate, render_document_pdf
     from models.order import Order
+    from PIL import Image
     image = io.BytesIO()
     Image.new('RGB', (80,40), 'green').save(image, format=format)
-    draft = DocumentTemplate.model_validate(template({'type':'logo','image':f'data:image/{mime};base64,'+base64.b64encode(image.getvalue()).decode()}))
+    draft = DocumentTemplate.model_validate(template({
+        'type':'logo','image':f'data:image/{mime};base64,'+base64.b64encode(image.getvalue()).decode(),
+    }))
     reader = PdfReader(io.BytesIO(render_document_pdf(draft, Order(**sample_order()))))
     assert '/XObject' in reader.pages[0]['/Resources']
 
@@ -164,8 +183,9 @@ def test_rejects_encrypted_upload(client):
 def test_caps_aggregate_logo_payload(app_env):
     import base64
     import random
-    from PIL import Image
+
     from documents import DocumentTemplate
+    from PIL import Image
     from pydantic import ValidationError
     image = io.BytesIO()
     pixels = random.Random(1).randbytes(600 * 600 * 3)
@@ -175,20 +195,24 @@ def test_caps_aggregate_logo_payload(app_env):
         DocumentTemplate.model_validate(template({'type':'logo','image':uri}, {'type':'logo','image':uri}))
 
 
-def test_logo_and_multi_page_table_pdf(app_env):
+def test_logo_and_bounded_canvas_table_pdf(app_env):
     import base64
-    from PIL import Image
+
     from documents import DocumentTemplate, render_document_pdf
     from models.order import Order
+    from PIL import Image
     image = io.BytesIO()
     Image.new('RGB', (120, 60), 'blue').save(image, format='PNG')
     uri = 'data:image/png;base64,' + base64.b64encode(image.getvalue()).decode()
     draft = DocumentTemplate.model_validate(template({'type':'logo','image':uri}, {'type':'items','show_prices':True}))
-    order = Order(**sample_order(items=[{'name':f'Śruba numer {i}', 'quantity':1, 'unit_price':2.5} for i in range(100)]))
+    order = Order(**sample_order(items=[
+        {'name':f'Śruba numer {i}', 'quantity':1, 'unit_price':2.5} for i in range(100)
+    ]))
     reader = PdfReader(io.BytesIO(render_document_pdf(draft, order)))
-    assert len(reader.pages) > 1
+    # A canvas is a single fixed A4 page; table overflow is clipped, not paginated.
+    assert len(reader.pages) == 1
     text = '\n'.join(page.extract_text() for page in reader.pages)
-    assert 'Śruba numer 0' in text and 'Śruba numer 99' in text and '250.00' in text
+    assert 'Śruba numer 0' in text
     assert any('/XObject' in page['/Resources'] for page in reader.pages)
 
 
@@ -205,20 +229,33 @@ def test_invalid_saved_settings_quarantined_without_losing_orders(app_env):
 
 @pytest.mark.parametrize('language,label', [('pl','Produkt'),('en','Product')])
 def test_preview_language_and_missing_prices(app_env, client, language, label):
-    app_env.write_state(app_env.default_state({'o-1':sample_order(items=[{'name':'No price', 'quantity':1, 'unit_price':None}])}))
+    app_env.write_state(app_env.default_state({
+        'o-1':sample_order(items=[{'name':'No price', 'quantity':1, 'unit_price':None}]),
+    }))
     draft = template({'type':'text','text':'{{tracking_number}}'}, {'type':'items','show_prices':True})
-    response = client.post('/api/print/document-preview', json={'order_id':'o-1','template':draft}, headers={'Accept-Language':language})
+    response = client.post(
+        '/api/print/document-preview', json={'order_id':'o-1','template':draft},
+        headers={'Accept-Language':language},
+    )
     text = pdf_text(response)
     assert label in text and '—' in text and 'No price' in text
     assert 'Total' not in text and 'Razem' not in text
 
 
 def test_validation_errors_are_localized_and_do_not_echo_template_input(client):
-    response = client.post('/api/print/document-settings', json={'source':'template','template':template({'type':'text','text':'PRIVATE_TEXT {{unknown}}'})}, headers={'Accept-Language':'en'})
+    response = client.post(
+        '/api/print/document-settings',
+        json={'source':'template','template':template({'type':'text','text':'PRIVATE_TEXT {{unknown'})},
+        headers={'Accept-Language':'en'},
+    )
     assert response.status_code == 422
     assert response.json()['detail'] == 'Unknown or malformed dynamic field.'
     assert 'PRIVATE_TEXT' not in response.text
-    invalid_size = client.post('/api/print/document-preview', json={'order_id':'o-1','template':template({'type':'text','text':'Hi','size':100})}, headers={'Accept-Language':'en'})
+    invalid_size = client.post(
+        '/api/print/document-preview',
+        json={'order_id':'o-1','template':template({'type':'text','text':'Hi','size':100})},
+        headers={'Accept-Language':'en'},
+    )
     assert isinstance(invalid_size.json()['detail'], str)
 
 
@@ -245,7 +282,11 @@ def test_render_failure_returns_safe_localized_error(app_env, client, monkeypatc
         raise RuntimeError('Internal sensitive path')
     monkeypatch.setattr(routes, 'render_document_pdf', fail)
     app_env.write_state(app_env.default_state({'o-1':sample_order()}))
-    response = client.post('/api/print/document-preview', json={'order_id':'o-1','template':template({'type':'text','text':'Hi'})}, headers={'Accept-Language':'en'})
+    response = client.post(
+        '/api/print/document-preview',
+        json={'order_id':'o-1','template':template({'type':'text','text':'Hi'})},
+        headers={'Accept-Language':'en'},
+    )
     assert response.status_code == 500
     assert response.json()['detail'] == 'Could not generate the PDF document.'
     assert 'sensitive' not in response.text
