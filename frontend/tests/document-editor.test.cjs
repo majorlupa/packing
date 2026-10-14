@@ -52,7 +52,18 @@ function matchOne(node, selector) {
 }
 
 function matches(node, selector) {
-  return selector.split(',').map(part => part.trim()).filter(Boolean).some(part => matchOne(node, part));
+  return selector.split(',').map(part => part.trim()).filter(Boolean).some(part => {
+    const chain = part.split(/\s+(?![^\[]*\])/);
+    if (!matchOne(node, chain.pop())) return false;
+    let ancestor = node.parentNode;
+    while (chain.length) {
+      const expected = chain.pop();
+      while (ancestor && !matchOne(ancestor, expected)) ancestor = ancestor.parentNode;
+      if (!ancestor) return false;
+      ancestor = ancestor.parentNode;
+    }
+    return true;
+  });
 }
 
 class Dom {
@@ -63,6 +74,7 @@ class Dom {
     this.attributes = new Map();
     this.classList = new ClassList();
     this.listeners = {};
+    this.style = {};
     this.dataset = {};
     this.isConnected = false;
     this.disabled = false;
@@ -110,6 +122,8 @@ class Dom {
   }
   click() { return this.dispatch('click'); }
   focus() {}
+  getBoundingClientRect() { return { width: 420, height: 594 }; }
+  setPointerCapture(id) { this.capturedPointer = id; }
   select() {}
   descendants() {
     const out = [];
@@ -146,7 +160,7 @@ function loadEditor({ orders = [], windowSpy, FileReader: reader } = {}) {
     document,
     URLSearchParams, Intl, setTimeout: (fn, ms) => { const timer = setTimeout(fn, ms); timer.unref(); return timer; }, clearTimeout, console,
     navigator: {},
-    window: windowSpy || { open: () => ({ location: { replace() {} }, close() {} }) },
+    window: windowSpy || { confirm: () => true, open: () => ({ location: { replace() {} }, close() {} }) },
     URL: { createObjectURL: () => 'blob:x', revokeObjectURL() {} },
     FileReader: reader,
   });
@@ -199,7 +213,7 @@ test('adding a block uses normalized defaults', () => {
   assert.equal(rendered.length, 1);
   assert.equal(rendered[0].getAttribute('data-type'), 'text');
   const draft = JSON.parse(vm.runInContext('JSON.stringify(DocumentEditor.draft.blocks[0])', context));
-  assert.deepEqual(draft, { type: 'text', text: '', align: 'left', size: 12, show_prices: false, image: '' });
+  assert.deepEqual(draft, { type: 'text', text: '', align: 'left', size: 12, show_prices: false, image: '', bold: false, x: 18, y: 18, w: 174, h: 24 });
 });
 
 test('moving blocks up and down reorders the draft', () => {
@@ -246,7 +260,7 @@ test('saving posts the source and full template and adopts the normalized respon
   assert.equal(body.source, 'template');
   assert.deepEqual(body.template, {
     id: 'default', name: 'My slip',
-    blocks: [{ type: 'text', text: 'Hello', align: 'left', size: 12, show_prices: false, image: '' }],
+    blocks: [{ type: 'text', text: 'Hello', align: 'left', size: 12, show_prices: false, image: '', bold: false, x: 18, y: 18, w: 174, h: 24 }],
   });
 
   const normalized = settingsFixture({
@@ -565,5 +579,128 @@ test('preview uses the chosen order and preserves the choice across block redraw
   };
   await container.querySelector('.editor-preview').click();
   assert.equal(JSON.parse(call.options.body).order_id, 'second');
+});
+
+test('legacy layout migrates exact mm defaults and heading bold', () => {
+  const context = loadEditor();
+  mount(context, settingsFixture({ templates: [{ id: 'default', name: 'T', blocks: ['heading', 'text', 'customer', 'items', 'logo', 'placeholder', 'line'].map(type => ({type})) }] }));
+  const geometry = JSON.parse(JSON.stringify(context.DocumentEditor.draft.blocks)).map(b => [b.x, b.y, b.w, b.h, b.bold]);
+  assert.deepEqual(geometry, [[18,18,174,18,true],[18,42,174,24,false],[18,72,174,30,false],[18,108,174,90,false],[18,204,174,35,false],[18,245,174,24,false],[18,275,174,1,false]]);
+});
+
+test('dotted and legacy fields resolve once as safe DOM text; unknown fields warn', () => {
+  const context = loadEditor();
+  const container = mount(context, textSettings('{{buyer.name}}|{{buyer_name}}|{{buyer.address}}|{{order.id}}|{{order_number}}|{{items}}|{{unknown.field}}|{{toString}}|{{__proto__}}'), [{id:'internal', allegro_id:'allegro', buyer_name:'<img onerror=x>{{courier}}', buyer_address:'A & B', courier:'SECRET', items:[{name:'<script>',quantity:2}]}]);
+  const content = container.querySelector('.editor-canvas-content');
+  assert.equal(content.textContent, '<img onerror=x>{{courier}}|<img onerror=x>{{courier}}|A & B|internal|allegro|<script> × 2|—|—|—');
+  assert.equal(content.children.length, 0);
+  assert.match(container.querySelector('.editor-warnings').textContent, /unknown.field/);
+  context.setLanguage('en', {root:container});
+  assert.match(container.querySelector('.editor-warnings').textContent, /Unknown placeholders/);
+});
+
+test('malformed placeholder blocks save and PDF; valid unknown remains savable', () => {
+  const context = loadEditor();
+  const container = mount(context, textSettings('{{bad-name}}'), [{id:'first'}]);
+  assert.equal(container.querySelector('.editor-save').disabled, true);
+  assert.equal(container.querySelector('.editor-preview').disabled, true);
+  container.querySelector('.editor-save').click();
+  assert.equal(context.apiCalls.length, 0);
+  const text = container.querySelector('.editor-block-text'); text.value = '{{missing}}'; text.dispatch('input');
+  assert.equal(container.querySelector('.editor-save').disabled, false);
+});
+
+test('geometry properties clamp to A4 bounds and update canvas immediately', () => {
+  const context = loadEditor(); const container = mount(context, textSettings());
+  const x = container.querySelector('.editor-geometry-x'); x.value = '999'; x.dispatch('input');
+  const y = container.querySelector('.editor-geometry-y'); y.value = '-5'; y.dispatch('input');
+  const h = container.querySelector('.editor-geometry-h'); h.value = '999'; h.dispatch('input');
+  const block = context.DocumentEditor.draft.blocks[0];
+  assert.deepEqual([block.x,block.y,block.w,block.h],[209,0,1,297]);
+  assert.equal(x.value, '209'); assert.equal(container.querySelector('.editor-canvas-block').style.height, '100%');
+  const bold = container.querySelector('.editor-block-bold'); bold.checked = true; bold.dispatch('change');
+  assert.equal(container.querySelector('.editor-canvas-block').style.fontWeight, '700');
+});
+
+test('real pointer drag/resize handlers snap mm, preserve drag size and cancel cleanly', () => {
+  const context = loadEditor(); const container = mount(context, textSettings());
+  const node = container.querySelector('.editor-canvas-block');
+  node.dispatch('pointerdown', {pointerId:1,clientX:0,clientY:0,button:0});
+  node.dispatch('pointermove', {pointerId:1,clientX:5,clientY:7});
+  let b = context.DocumentEditor.draft.blocks[0]; assert.deepEqual([b.x,b.y,b.w,b.h],[21,22,174,24]);
+  node.dispatch('pointermove', {pointerId:1,clientX:10000,clientY:10000});
+  assert.deepEqual([b.x,b.y,b.w,b.h],[36,273,174,24]);
+  node.dispatch('pointercancel'); node.dispatch('pointermove',{pointerId:1,clientX:0,clientY:0}); assert.equal(b.x,36);
+  node.dispatch('pointerdown', {target:node.querySelector('.editor-resize'),pointerId:2,clientX:0,clientY:0});
+  node.dispatch('pointermove',{pointerId:2,clientX:-400,clientY:-400}); assert.deepEqual([b.w,b.h],[1,1]);
+});
+
+test('real keyboard and header handlers select, nudge and delete without editing text', () => {
+  const context = loadEditor(); const container = mount(context, textSettings());
+  const node = container.querySelector('.editor-canvas-block');
+  node.dispatch('keydown',{key:'ArrowRight'}); node.dispatch('keydown',{key:'ArrowDown',shiftKey:true});
+  assert.deepEqual([context.DocumentEditor.draft.blocks[0].x,context.DocumentEditor.draft.blocks[0].y],[19,28]);
+  node.dispatch('keydown',{key:'Delete',target:container.querySelector('.editor-block-text')}); assert.equal(context.DocumentEditor.draft.blocks.length,1);
+  container.querySelector('.editor-block-head').dispatch('click'); assert.equal(context.DocumentEditor.draft.selectedIndex,0);
+  node.dispatch('keydown',{key:'Delete'}); assert.equal(context.DocumentEditor.draft.blocks.length,0);
+});
+
+test('sample/current order preview updates immediately; sample disables real PDF', () => {
+  const context = loadEditor(); const container = mount(context, textSettings('{{buyer.name}}'), [{id:'one',buyer_name:'Real buyer'}]);
+  const select = container.querySelector('.editor-preview-order'); assert.equal(container.querySelector('.editor-canvas-content').textContent,'Real buyer');
+  select.value = ''; select.dispatch('change'); assert.equal(container.querySelector('.editor-canvas-content').textContent,'Anna Kowalska');
+  assert.equal(container.querySelector('.editor-preview').disabled,true);
+});
+
+test('select duplicate delete handlers use collection routes and returned active settings', async () => {
+  const context = loadEditor(); const initial = textSettings();
+  initial.templates.push({id:'other',name:'Other',blocks:[{type:'line'}]});
+  const container = mount(context,initial); const select = container.querySelector('.editor-template-select');
+  select.value = 'other'; const switching = select.dispatch('change'); await Promise.resolve();
+  assert.equal(context.apiCalls[0].path,'/print/document-templates/other/select');
+  const selected = {...initial,profiles:{default:{source:'template',active_template_id:'other'}}}; context.apiCalls[0].resolve(selected); await switching;
+  assert.equal(context.DocumentEditor.draft.templateId,'other');
+  const duplicating = container.querySelector('.editor-template-duplicate').click(); await Promise.resolve();
+  assert.equal(context.apiCalls[1].path,'/print/document-templates/other/duplicate'); assert.equal(JSON.parse(context.apiCalls[1].options.body).name,'Other (copy)');
+  const duplicated = {...selected,templates:[...selected.templates,{id:'copy',name:'Other (copy)',blocks:[{type:'line'}]}],profiles:{default:{source:'template',active_template_id:'copy'}}}; context.apiCalls[1].resolve(duplicated); await duplicating;
+  const deleting = container.querySelector('.editor-template-delete').click(); await Promise.resolve();
+  assert.equal(context.apiCalls[2].path,'/print/document-templates/copy'); assert.equal(context.apiCalls[2].options.method,'DELETE');
+  context.apiCalls[2].resolve(selected); await deleting; assert.equal(context.DocumentEditor.draft.templateId,'other');
+});
+
+test('duplicate saves dirty draft first and failed save never duplicates', async () => {
+  const context = loadEditor(); const container = mount(context,textSettings());
+  const text = container.querySelector('.editor-block-text'); text.value='New'; text.dispatch('input');
+  const duplicating = container.querySelector('.editor-template-duplicate').click();
+  assert.equal(context.apiCalls[0].path,'/print/document-settings');
+  context.apiCalls[0].reject(new Error('Save failed')); await duplicating;
+  assert.equal(context.apiCalls.length,1); assert.equal(context.DocumentEditor.draft.blocks[0].text,'New');
+});
+
+test('collection limits and discard cancellation prevent requests', async () => {
+  const context = loadEditor(); const container = mount(context,textSettings());
+  assert.equal(container.querySelector('.editor-template-delete').disabled,true);
+  await container.querySelector('.editor-template-delete').click(); assert.equal(context.apiCalls.length,0);
+  const text = container.querySelector('.editor-block-text'); text.value='Dirty'; text.dispatch('input'); context.window.confirm=()=>false;
+  const select=container.querySelector('.editor-template-select'); select.value='other'; await select.dispatch('change'); assert.equal(context.apiCalls.length,0);
+  const many=textSettings(); many.templates=Array.from({length:10},(_,i)=>({id:i?'t'+i:'default',name:'T',blocks:[{type:'line'}]})); mount(context,many);
+  assert.equal(context.testContainer.querySelector('.editor-template-duplicate').disabled,true);
+});
+
+test('successful duplicate saves newest text and survives pending navigation', async () => {
+  const context = loadEditor(); const container = mount(context,textSettings());
+  const text = container.querySelector('.editor-block-text'); text.value='Newest'; text.dispatch('input');
+  const pending=container.querySelector('.editor-template-duplicate').click();
+  assert.equal(container.querySelector('.editor-block-text').disabled,true);
+  mount(context,textSettings());
+  assert.equal(context.testContainer.querySelector('.editor-template-select').disabled,true);
+  context.apiCalls[0].resolve(textSettings('Newest'));
+  await context.DocumentEditor.lastSavePromise; await Promise.resolve();
+  assert.equal(context.apiCalls[1].path,'/print/document-templates/default/duplicate');
+  const saved=textSettings('Newest'); saved.templates.push({id:'copy',name:'T (copy)',blocks:[{type:'text',text:'Newest'}]}); saved.profiles.default.active_template_id='copy';
+  context.apiCalls[1].resolve(saved); await pending;
+  assert.equal(context.DocumentEditor.draft.templateId,'copy');
+  assert.equal(context.testContainer.querySelector('.editor-block-text').value,'Newest');
+  assert.equal(context.testContainer.querySelector('.editor-block-text').disabled,false);
 });
 

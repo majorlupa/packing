@@ -13,16 +13,16 @@ from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 PLACEHOLDERS = {"buyer_name", "buyer_address", "order_number", "date", "courier", "pickup_point", "tracking_number"}
-_TOKEN = re.compile(r"\{\{\s*([a-z_]+)\s*\}\}")
+_TOKEN = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_.]*)\s*\}\}")
+CANVAS_PLACEHOLDERS = PLACEHOLDERS | {"buyer.name", "buyer.address", "order.id", "order.date", "items"}
 MAX_LOGO_BYTES = 2 * 1024 * 1024
 
 
 def validate_text(text: str) -> None:
-    tokens = _TOKEN.findall(text)
+    # Unknown identifiers are warnings, not errors, for both legacy and canvas blocks.
+    # Expressions, directives and malformed delimiters remain invalid everywhere.
     remainder = _TOKEN.sub("", text)
-    if any(token not in PLACEHOLDERS for token in tokens) or any(
-        marker in remainder for marker in ("{{", "}}", "{%", "%}", "{#", "#}")
-    ):
+    if any(marker in remainder for marker in ("{{", "}}", "{%", "%}", "{#", "#}")):
         raise ValueError(t("document.invalid_fields"))
 
 
@@ -50,12 +50,17 @@ def validate_logo(image: str) -> bytes:
 
 class DocumentBlock(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    type: Literal["heading", "text", "customer", "items", "logo"]
+    type: Literal["heading", "text", "customer", "items", "logo", "placeholder", "line"]
     text: str = Field("", max_length=4000)
     align: Literal["left", "center", "right"] = "left"
     size: int = Field(12, ge=8, le=36, strict=True)
     show_prices: bool = False
     image: str = Field("", max_length=2_800_000)
+    x: float | None = Field(None, allow_inf_nan=False)
+    y: float | None = Field(None, allow_inf_nan=False)
+    w: float | None = Field(None, allow_inf_nan=False)
+    h: float | None = Field(None, allow_inf_nan=False)
+    bold: bool = False
 
     @model_validator(mode="after")
     def safe_content(self):
@@ -73,12 +78,27 @@ class DocumentTemplate(BaseModel):
     id: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,64}$")
     name: str = Field(min_length=1, max_length=100)
     blocks: list[DocumentBlock] = Field(default_factory=list, max_length=50)
+    warnings: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def bounded_images(self):
         # JSON state is parsed on each accessor: bound the aggregate, not just each logo.
         if sum(len(block.image) for block in self.blocks) > 2_800_000:
             raise ValueError(t("document.logo_total"))
+        cursor = 18.0
+        for block in self.blocks:
+            default_height = {"heading": 18, "text": 24, "customer": 30, "items": 90,
+                              "logo": 35, "placeholder": 24, "line": 1}[block.type]
+            legacy = all(value is None for value in (block.x, block.y, block.w, block.h))
+            block.x = max(0.0, min(209.0, block.x if block.x is not None else 18.0))
+            block.y = max(0.0, min(296.0, block.y if block.y is not None else cursor))
+            block.w = max(1.0, min(210.0 - block.x, block.w if block.w is not None else 174.0))
+            block.h = max(1.0, min(297.0 - block.y, block.h if block.h is not None else default_height))
+            if legacy and block.type == "heading" and "bold" not in block.model_fields_set:
+                block.bold = True
+            cursor = block.y + block.h + 6
+        self.warnings = sorted({f"Unknown placeholder: {token}" for block in self.blocks
+                                for token in _TOKEN.findall(block.text) if token not in CANVAS_PLACEHOLDERS})
         return self
 
 
@@ -117,15 +137,21 @@ def render_document_html(template: DocumentTemplate, order: Order) -> str:
         "order_number": order.allegro_id, "date": date.today().strftime(date_format(current_language.get())),
         "courier": order.courier, "pickup_point": order.pickup_point, "tracking_number": order.tracking_number,
     }
+    values.update({"buyer.name": order.buyer_name, "buyer.address": order.buyer_address,
+                   "order.id": order.id, "order.date": values["date"],
+                   "items": "\n".join(f"{item.name} × {item.quantity}" for item in order.items)})
 
     def text(value):
         # Substitute only original tokens: order data containing braces is never interpreted.
-        return escape(_TOKEN.sub(lambda match: str(values[match.group(1)] or "—"), value))
+        return escape(_TOKEN.sub(lambda match: str(values.get(match.group(1)) or "—"), value))
 
     sections = []
     for block in template.blocks:
-        style = f'text-align:{block.align};font-size:{block.size}pt'
-        if block.type in ("heading", "text"):
+        style = (f'text-align:{block.align};font-size:{block.size}pt;'
+                 f'font-weight:{"bold" if block.bold else "normal"}')
+        sections.append(f'<div class="element" style="left:{block.x}mm;top:{block.y}mm;'
+                        f'width:{block.w}mm;height:{block.h}mm;{style}">')
+        if block.type in ("heading", "text", "placeholder"):
             tag = "h2" if block.type == "heading" else "p"
             sections.append(f'<{tag} class="text" style="{style}">{text(block.text)}</{tag}>')
         elif block.type == "logo" and block.image:
@@ -159,11 +185,17 @@ def render_document_html(template: DocumentTemplate, order: Order) -> str:
                 f'<table style="{style}"><thead><tr>' + ''.join(f'<th>{escape(header)}</th>' for header in headers)
                 + '</tr></thead><tbody>' + ''.join(rows) + '</tbody>' + total + '</table>'
             )
+        elif block.type == "line":
+            sections.append('<div class="rule"></div>')
+        sections.append('</div>')
     return ('<!doctype html><html lang="' + current_language.get() + '"><head><meta charset="utf-8"><title>'
             + escape(template.name) + '</title><style>'
-            '@page{size:A4;margin:18mm}body{font-family:DejaVu Sans,sans-serif;color:#222;font-size:12pt}'
-            'h2,p,section,table{margin:0 0 6mm}.text{white-space:pre-wrap;overflow-wrap:anywhere}'
-            'h2{break-after:avoid}.logo{max-width:65mm;max-height:35mm;margin-bottom:6mm}'
+            '@page{size:A4;margin:0}html,body{margin:0;padding:0}'
+            'body{position:relative;width:210mm;height:297mm;font-family:DejaVu Sans,sans-serif;color:#222}'
+            '.element{position:absolute;overflow:hidden;box-sizing:border-box}'
+            'h2,p,section,table{margin:0;font-size:inherit;font-weight:inherit}'
+            '.text{white-space:pre-wrap;overflow-wrap:anywhere}'
+            '.logo{max-width:100%;max-height:100%;object-fit:contain}.rule{border-top:0.3mm solid #222}'
             'table{border-collapse:collapse;width:100%;table-layout:fixed}'
             'th,td{padding:3mm;border-bottom:1px solid #ddd;overflow-wrap:anywhere}'
             'th:first-child,td:first-child{width:48%}thead{display:table-header-group}tr{break-inside:avoid}.total{font-weight:bold}'

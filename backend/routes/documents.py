@@ -1,6 +1,7 @@
 """Custom document settings and draft previews. No shipment or OAuth side effects."""
 import logging
 from typing import Literal
+from uuid import uuid4
 
 import store
 from documents import DocumentSettings, DocumentTemplate, render_document_pdf
@@ -25,10 +26,15 @@ class DocumentPreview(BaseModel):
     template: DocumentTemplate
 
 
+class DocumentDuplicate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = Field(None, min_length=1, max_length=100)
+
+
 def has_content(template: DocumentTemplate) -> bool:
-    return any(block.type in ("customer", "items") or
+    return any(block.type in ("customer", "items", "line") or
                (block.type == "logo" and block.image) or
-               (block.type in ("heading", "text") and block.text.strip()) for block in template.blocks)
+               (block.type in ("heading", "text", "placeholder") and block.text.strip()) for block in template.blocks)
 
 
 def active_template(settings: dict) -> DocumentTemplate:
@@ -64,13 +70,14 @@ def save_document_settings(body: DocumentSave):
     def mutate(state):
         settings = state["document_settings"]
         profile = settings["profiles"]["default"]
-        if body.template.id != profile["active_template_id"]:
+        if not any(item["id"] == body.template.id for item in settings["templates"]):
             raise HTTPException(status_code=422, detail=t("document.template_id"))
         for index, item in enumerate(settings["templates"]):
             if item["id"] == body.template.id:
                 settings["templates"][index] = body.template.model_dump()
                 break
         profile["source"] = body.source
+        profile["active_template_id"] = body.template.id
         saved = DocumentSettings.model_validate(settings).model_dump()
         state["document_settings"] = saved
         return saved
@@ -82,3 +89,58 @@ def save_document_settings(body: DocumentSave):
 def preview_document(body: DocumentPreview):
     return Response(content=personalized_pdf(body.template, body.order_id), media_type="application/pdf",
                     headers={"Cache-Control": "no-store"})
+
+
+def find_template(settings: dict, template_id: str) -> dict:
+    for template in settings["templates"]:
+        if template["id"] == template_id:
+            return template
+    raise HTTPException(status_code=404, detail="Template not found")
+
+
+@router.post("/document-templates/{template_id}/duplicate")
+def duplicate_document_template(template_id: str, body: DocumentDuplicate | None = None):
+    def mutate(state):
+        settings = state["document_settings"]
+        original = find_template(settings, template_id)
+        if len(settings["templates"]) >= 10:
+            raise HTTPException(status_code=422, detail="Maximum 10 templates")
+        duplicate = DocumentTemplate.model_validate(original).model_dump()
+        duplicate["id"] = uuid4().hex
+        duplicate["name"] = body.name if body and body.name else (original["name"][:95] + " copy")
+        settings["templates"].append(duplicate)
+        settings["profiles"]["default"]["active_template_id"] = duplicate["id"]
+        saved = DocumentSettings.model_validate(settings).model_dump()
+        state["document_settings"] = saved
+        return saved
+    return store.transact(mutate)
+
+
+@router.delete("/document-templates/{template_id}")
+def delete_document_template(template_id: str):
+    def mutate(state):
+        settings = state["document_settings"]
+        find_template(settings, template_id)
+        if len(settings["templates"]) == 1:
+            raise HTTPException(status_code=422, detail="Cannot delete the last template")
+        settings["templates"] = [item for item in settings["templates"] if item["id"] != template_id]
+        fallback = settings["templates"][0]["id"]
+        for profile in settings["profiles"].values():
+            if profile["active_template_id"] == template_id:
+                profile["active_template_id"] = fallback
+        saved = DocumentSettings.model_validate(settings).model_dump()
+        state["document_settings"] = saved
+        return saved
+    return store.transact(mutate)
+
+
+@router.post("/document-templates/{template_id}/select")
+def select_document_template(template_id: str):
+    def mutate(state):
+        settings = state["document_settings"]
+        find_template(settings, template_id)
+        settings["profiles"]["default"]["active_template_id"] = template_id
+        saved = DocumentSettings.model_validate(settings).model_dump()
+        state["document_settings"] = saved
+        return saved
+    return store.transact(mutate)
