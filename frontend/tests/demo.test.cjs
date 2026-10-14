@@ -12,7 +12,7 @@ function demo() {
     assert.equal(response.ok, true, await response.clone().text());
     return response.json();
   };
-  return { api, read, send };
+  return { api, read, send, context };
 }
 test('sample orders complete the picking, packing, PDF, done and archive workflow', async () => {
   const { api, read, send } = demo();
@@ -25,7 +25,8 @@ test('sample orders complete the picking, packing, PDF, done and archive workflo
   assert.equal((await read('/picking-lists'))[0].name, 'Morning batch');
   await send(`/picking-lists/${list.id}/start-packing`);
   assert.equal((await read('/orders/'))[0].status, 'packing');
-  const label = await api.request(`/print/orders/${id}/label?weight=1`);
+  await send(`/print/orders/${id}/label?weight=1`);
+  const label = await api.request(`/print/orders/${id}/label`);
   assert.equal(label.headers.get('content-type'), 'application/pdf');
   assert.match(await label.text(), /NOT VALID FOR SHIPPING/);
   assert.equal((await read('/orders/'))[0].shipment_id, `sample-${id}`);
@@ -108,10 +109,10 @@ test('custom demo PDFs contain only template blocks, not inherited order content
   assert.doesNotMatch(pdf, /CUSTOM ONLY/);
 });
 
-test('demo build includes every referenced local script including the editor', () => {
+test('demo build includes every referenced local script and stylesheet including the editor', () => {
   require('node:child_process').execFileSync(process.execPath, ['tools/build-demo.cjs']);
   const html = fs.readFileSync('dist/index.html','utf8');
-  for (const [,src] of html.matchAll(/<script src="([^"]+)"/g)) {
+  for (const [,src] of html.matchAll(/(?:<script src|<link rel="stylesheet" href)="([^"]+)"/g)) {
     assert.ok(fs.existsSync(`dist/${src}`), src);
   }
 });
@@ -129,14 +130,16 @@ test('locker sizes are stored per order, validated, printed and reset', async ()
   assert.throws(() => api.setParcelSize(id, 'D'), /gabaryt/);
   assert.throws(() => api.setParcelSize(orders[0].id, 'B'), /gabaryt/);
   for (const size of ['A', 'B', 'C']) {
-    const response = await api.request(`/print/orders/${id}/label?parcel_size=${size}`);
+    api.setParcelSize(id, size);
+    assert.equal((await api.request(`/print/orders/${id}/label`, {method:'POST'})).ok, true);
+    const response = await api.request(`/print/orders/${id}/label`);
     assert.equal(response.ok, true);
     assert.match(await response.text(), new RegExp(`PACZKOMAT INPOST - SIZE ${size}`));
   }
   api.setParcelSize(id, 'A');
   assert.equal((await read('/orders/')).find(order => order.id === id).shipment_id, null);
-  assert.equal((await api.request(`/print/orders/${id}/label?parcel_size=D`)).status, 400);
-  assert.equal((await api.request(`/print/orders/${id}/label`)).status, 200);
+  assert.equal((await api.request(`/print/orders/${id}/label`)).status, 409);
+  assert.equal((await api.request(`/print/orders/${id}/label`, {method:'POST'})).status, 200);
   api.reset();
   assert.equal((await read('/orders/')).find(order => order.id === id).parcel_size, 'A');
 });
@@ -144,10 +147,105 @@ test('locker sizes are stored per order, validated, printed and reset', async ()
 test('locker PATCH and shipment readback match the shared application contracts', async () => {
   const {api, read, send} = demo();
   assert.equal((await send('/orders/demo-102/parcel-size', {parcel_size:'B'}, 'PATCH')).parcel_size, 'B');
+  await send('/print/orders/demo-102/label');
   const label = await api.request('/print/orders/demo-102/label');
   assert.match(await label.text(), /SIZE B/);
   const shipment = await read('/print/orders/demo-102/shipment');
   assert.equal(shipment.shipment_id, 'sample-demo-102');
   assert.equal(shipment.tracking_number, 'DEMO-TRACK-demo-102');
   assert.equal((await api.request('/orders/demo-102/parcel-size', {method:'PATCH',body:'{"parcel_size":"C"}'})).status,409);
+});
+
+test('label creation is JSON and idempotent; GET only downloads an existing sample', async () => {
+  const {api, read, send} = demo();
+  const path = '/print/orders/demo-101/label';
+  assert.equal((await api.request(path)).status, 409);
+  assert.equal((await read('/orders/'))[0].shipment_id, null);
+  assert.equal((await api.request(`${path}?weight=0`, {method:'POST'})).status, 422);
+  const created = await send(`${path}?length=30&width=20&height=15&weight=1`);
+  assert.deepEqual(await send(path), created);
+  assert.deepEqual(await read('/print/orders/demo-101/shipment'), created);
+  const pdf = await api.request(`${path}?weight=0`);
+  assert.equal(pdf.headers.get('content-type'), 'application/pdf');
+  assert.match(await pdf.text(), /^%PDF-1.4/);
+  api.reset();
+  assert.equal((await api.request(path)).status, 409);
+});
+
+test('named templates duplicate, edit, select, delete and render the active content offline', async () => {
+  const {api, read, send} = demo();
+  const original = {id:'default',name:'Original',blocks:[{type:'text',text:'ORIGINAL'}]};
+  await send('/print/document-settings', {source:'template',template:original});
+  const copied = await send('/print/document-templates/default/duplicate', {name:'Second'});
+  const id = copied.profiles.default.active_template_id;
+  assert.notEqual(id, 'default');
+  const template = {id,name:'Renamed',blocks:[{type:'placeholder',text:'ONLY {{ buyer.name }} {{order.id}} {{unknown}}',x:20,y:30,w:100,h:20}]};
+  await send('/print/document-settings', {source:'template',template});
+  const before = await read('/print/document-settings');
+  const unsaved = {...template,blocks:[{type:'text',text:'UNSAVED'}]};
+  const preview = await api.request('/print/document-preview', {method:'POST',body:JSON.stringify({order_id:'demo-101',template:unsaved})});
+  assert.match(await preview.text(), /UNSAVED/);
+  assert.deepEqual(await read('/print/document-settings'), before);
+  const pdf = await (await api.request('/print/custom-doc?order_id=demo-101')).text();
+  assert.match(pdf, /ONLY Anna Demo demo-101 -/);
+  assert.doesNotMatch(pdf, /ORIGINAL|UNSAVED|DEMO-101|Kubek|Notes|SAMPLE ORDER DOCUMENT/);
+  await send('/print/document-templates/default/select');
+  assert.match(await (await api.request('/print/custom-doc?order_id=demo-101')).text(), /ORIGINAL/);
+  assert.equal((await read('/print/document-settings')).templates[0].blocks[0].text, 'ORIGINAL');
+  await send(`/print/document-templates/${id}/select`);
+  const deleted = await send(`/print/document-templates/${id}`, undefined, 'DELETE');
+  assert.equal(deleted.profiles.default.active_template_id, 'default');
+  assert.equal((await api.request('/print/document-templates/default', {method:'DELETE'})).status, 422);
+  assert.equal((await api.request(`/print/document-templates/${id}/select`, {method:'POST'})).status, 404);
+  for (let i = 0; i < 9; i++) await send('/print/document-templates/default/duplicate');
+  assert.equal((await api.request('/print/document-templates/default/duplicate', {method:'POST'})).status, 422);
+  api.reset();
+  assert.equal((await read('/print/document-settings')).templates.length, 1);
+});
+
+test('empty and malformed drafts fail with JSON details without changing saved templates', async () => {
+  const {api, read, send} = demo();
+  const before = await read('/print/document-settings');
+  for (const blocks of [[], [{type:'text',text:'   '}], [{type:'text',text:'{{buyer.name + 1}}'}], [{type:'invalid'}]]) {
+    const response = await api.request('/print/document-settings', {method:'POST',body:JSON.stringify({source:'template',template:{id:'default',name:'Invalid',blocks}})});
+    assert.equal(response.status, 422);
+    assert.equal(typeof (await response.json()).detail, 'string');
+  }
+  assert.deepEqual(await read('/print/document-settings'), before);
+  assert.equal((await api.request('/print/document-preview', {method:'POST',body:'{'})).status, 422);
+  await send('/print/document-settings', {source:'template',template:{id:'default',name:'Rule',blocks:[{type:'line'}]}});
+  assert.equal((await read('/print/custom-doc/info')).available, true);
+  assert.equal((await api.request('/print/custom-doc?order_id=demo-101')).ok, true);
+});
+
+test('shared JSON and PDF helpers report mock errors as toasts without token prompts or network', async () => {
+  const {context} = demo();
+  const nodes = {'toast-info':{textContent:'',isConnected:true},'toast-error':{textContent:'',isConnected:true}};
+  const tab = {closed:false,close() { this.closed = true; }};
+  Object.assign(context, {
+    Headers, Intl,
+    document:{getElementById:id => nodes[id] || null,querySelectorAll:() => [],documentElement:null},
+    window:{open:() => tab,prompt:() => assert.fail('demo must not prompt for tokens')},
+    fetch:() => assert.fail('demo must not access the network'),
+    setTimeout:() => 1,clearTimeout:() => {},
+  });
+  const source = fs.readFileSync('frontend/static/app.js','utf8');
+  vm.runInContext(source.slice(0,source.indexOf('// ---- Sidebar events ----')), context);
+  assert.equal((await context.api('/orders/')).length, 5);
+  for (const action of [
+    () => context.api('/picking-lists',{method:'POST',body:'{"order_ids":["missing"]}'}),
+    () => context.openPdf('/print/orders/demo-101/label'),
+  ]) {
+    let error;
+    try { await action(); } catch (err) { error = err; }
+    assert.ok(error);
+    context.reportError('Mock failure', error);
+    assert.equal(nodes['toast-error'].textContent, `Mock failure\n${error.message}`);
+    assert.doesNotMatch(nodes['toast-error'].textContent, /\[object Object\]|"detail"/);
+  }
+  assert.equal(tab.closed, true);
+});
+
+test('demo chrome hides reconnect even after periodic auth updates', () => {
+  assert.match(fs.readFileSync('frontend/demo/demo.css','utf8'), /\.demo-mode #sidebar #btn-auth\s*\{\s*display: none !important/);
 });
