@@ -712,7 +712,11 @@ var DocumentEditor = (function () {
     var canvasWrap = el('div', 'editor-canvas-wrap'); var instructions = el('p', 'editor-canvas-instructions'); setText(instructions, 'doc.canvas'); canvasWrap.appendChild(instructions); canvasWrap.appendChild(canvasUI.canvas);
     var warnings = el('p', 'editor-warnings'); warnings.setAttribute('role', 'status'); canvasWrap.appendChild(warnings);
     bindNode(warnings, function () { var tokens = unknownTokens(draft.blocks); return tokens.length ? t('doc.unknown') + ': ' + tokens.join(', ') : ''; });
-    workspace.appendChild(canvasWrap); workspace.appendChild(blocksWrap); templateWrap.appendChild(workspace);
+    var sidePanel = el('section', 'editor-side-panel');
+    sidePanel.setAttribute('aria-label', t('doc.blockPanel'));
+    sidePanel.setAttribute('data-i18n-aria', 'doc.blockPanel');
+    var panelTitle = el('h4'); setText(panelTitle, 'doc.blockPanel'); sidePanel.appendChild(panelTitle);
+    workspace.appendChild(canvasWrap); workspace.appendChild(sidePanel); templateWrap.appendChild(workspace);
 
     var addRow = el('div', 'editor-add');
     var typeSelect = document.createElement('select');
@@ -739,7 +743,8 @@ var DocumentEditor = (function () {
     });
     addRow.appendChild(typeSelect);
     addRow.appendChild(addBtn);
-    templateWrap.appendChild(addRow);
+    sidePanel.appendChild(addRow);
+    sidePanel.appendChild(blocksWrap);
 
     var previewOrderLabel = el('label', 'editor-label');
     setText(previewOrderLabel, 'doc.previewOrder');
