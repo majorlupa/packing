@@ -201,7 +201,8 @@ def _load() -> dict:
 
     try:
         return _normalise(json.loads(DATA_FILE.read_text(encoding="utf-8")))
-    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError, StateError) as exc:
+        # Valid JSON with an invalid root shape needs the same backup recovery.
         if not BACKUP_FILE.exists():
             raise StateError(
                 t("store.unreadable_no_backup", path=DATA_FILE, exc=exc)
