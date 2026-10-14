@@ -246,6 +246,124 @@ test('shared JSON and PDF helpers report mock errors as toasts without token pro
   assert.equal(tab.closed, true);
 });
 
+test('template exports download one or all as JSON blobs and missing IDs return 404', async () => {
+  const {api, read, send} = demo();
+  const settings = await send('/print/document-templates/default/duplicate', {name:'Second'});
+  const id = settings.profiles.default.active_template_id;
+  for (const [path, templates, filename] of [
+    ['/print/document-templates/export', settings.templates, 'packing-templates.json'],
+    [`/print/document-templates/export?template_id=${encodeURIComponent(id)}`, [settings.templates[1]], `packing-template-${id}.json`],
+  ]) {
+    const response = await api.request(path);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-type'), 'application/json');
+    assert.equal(response.headers.get('content-disposition'), `attachment; filename="${filename}"`);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    const blob = await response.blob(); // Same download path as document-editor.js.
+    const data = JSON.parse(await blob.text());
+    assert.equal(data.format, 'packing.document-templates');
+    assert.equal(data.version, 1);
+    assert.ok(Number.isFinite(Date.parse(data.exported_at)));
+    assert.deepEqual(data.templates, templates);
+    assert.deepEqual(Object.keys(data.templates[0]).sort(), ['blocks','id','name']);
+  }
+  for (const id of ['missing', '']) {
+    assert.equal((await api.request(`/print/document-templates/export?template_id=${id}`)).status, 404);
+  }
+  assert.deepEqual(await read('/print/document-settings'), settings);
+});
+
+test('export/import rename round trips blocks with fresh IDs and preserves profiles', async () => {
+  const {read, send} = demo();
+  const template = {id:'default',name:'Insert',blocks:[{type:'text',text:'Hello {{buyer.name}}',x:20,y:30,w:100,h:20}]};
+  const before = await send('/print/document-settings', {source:'template',template});
+  const data = await read('/print/document-templates/export');
+  for (const suffix of [2, 3]) {
+    const result = await send('/print/document-templates/import', {data,on_conflict:'rename'});
+    const imported = result.settings.templates.find(entry => entry.id === result.imported[0]);
+    assert.notEqual(imported.id, template.id);
+    assert.equal(imported.name, `Insert (${suffix})`);
+    assert.deepEqual(imported.blocks, template.blocks);
+    assert.deepEqual(result.settings.profiles, before.profiles);
+    assert.deepEqual(await read('/print/document-settings'), result.settings);
+  }
+  const other = demo();
+  const result = await other.send('/print/document-templates/import', {data,on_conflict:'rename'});
+  assert.equal(result.settings.templates[1].name, 'Insert');
+  assert.notEqual(result.imported[0], template.id);
+  assert.deepEqual(result.settings.templates[1].blocks, template.blocks);
+});
+
+test('import rename truncates long names and skips existing numbered conflicts', async () => {
+  const {read, send} = demo();
+  const name = 'N'.repeat(100);
+  await send('/print/document-settings', {source:'upload',template:{id:'default',name,blocks:[]}});
+  const data = await read('/print/document-templates/export');
+  for (const number of [2, 3]) {
+    const result = await send('/print/document-templates/import', {data,on_conflict:'rename'});
+    assert.equal(result.settings.templates.at(-1).name, `${name.slice(0,96)} (${number})`);
+    assert.equal(result.settings.templates.at(-1).name.length, 100);
+  }
+});
+
+test('import overwrite matches trimmed names, keeps existing ID and active template', async () => {
+  const {read, send} = demo();
+  await send('/print/document-settings', {source:'template',template:{id:'default',name:' Insert ',blocks:[{type:'line'}]}});
+  const before = await send('/print/document-templates/default/duplicate', {name:'Active'});
+  const data = await read('/print/document-templates/export?template_id=default');
+  data.templates[0] = {id:'foreign-id',name:' Insert ',blocks:[{type:'text',text:'REPLACED'}]};
+  data.templates.push({id:'default',name:'New',blocks:[]});
+  const result = await send('/print/document-templates/import', {data,on_conflict:'overwrite'});
+  assert.equal(result.imported[0], 'default');
+  assert.notEqual(result.imported[1], 'default');
+  assert.deepEqual(result.settings.templates[0], {...data.templates[0],id:'default',name:'Insert'});
+  assert.deepEqual(result.settings.profiles, before.profiles);
+  assert.deepEqual(await read('/print/document-settings'), result.settings);
+});
+
+test('invalid import files and conflicts leave all saved settings unchanged', async () => {
+  const {api, read} = demo();
+  const before = await read('/print/document-settings');
+  const data = await read('/print/document-templates/export');
+  const template = data.templates[0];
+  const cases = [
+    {...data,format:'wrong'}, {...data,version:2}, {...data,version:'1'}, {...data,version:true},
+    {...data,exported_at:'invalid'}, {...data,unexpected:true}, {...data,templates:[]},
+    {...data,templates:[template,{...template,id:'other',name:` ${template.name} `}]},
+    ...[null, {...template,id:'bad id'}, {...template,name:'   '},
+      {...template,name:'N'.repeat(101)}, {...template,blocks:[{type:'invalid'}]},
+      {...template,blocks:[{type:'text',text:'{{buyer.name + 1}}'}]}].map(invalid => ({...data,templates:[template,invalid]})),
+    {...data,templates:Array.from({length:11}, (_, i) => ({...template,id:`id-${i}`,name:`Name ${i}`}))},
+  ];
+  for (const body of [...cases.map(data => ({data,on_conflict:'rename'})),
+    {data,on_conflict:'invalid'}, {data}, {data:null,on_conflict:'rename'}]) {
+    const response = await api.request('/print/document-templates/import', {method:'POST',body:JSON.stringify(body)});
+    assert.equal(response.status, 422);
+    assert.equal(typeof (await response.json()).detail, 'string');
+    assert.deepEqual(await read('/print/document-settings'), before);
+  }
+});
+
+test('import limit failures roll back staged overwrites and additions; overwrite at ten succeeds', async () => {
+  const {api, read, send} = demo();
+  for (let i = 1; i < 10; i++) await send('/print/document-templates/default/duplicate', {name:`Name ${i}`});
+  const before = await read('/print/document-settings');
+  const data = await read('/print/document-templates/export?template_id=default');
+  const changed = {...data.templates[0],blocks:[{type:'text',text:'REPLACED'}]};
+  for (const on_conflict of ['rename','overwrite']) {
+    const response = await api.request('/print/document-templates/import', {method:'POST',body:JSON.stringify({
+      data:{...data,templates:[changed,{id:'new',name:'New',blocks:[]}]},on_conflict,
+    })});
+    assert.equal(response.status, 422);
+    assert.deepEqual(await read('/print/document-settings'), before);
+  }
+  const result = await send('/print/document-templates/import', {data:{...data,templates:[changed]},on_conflict:'overwrite'});
+  assert.deepEqual(result.imported, ['default']);
+  assert.equal(result.settings.templates.length, 10);
+  assert.deepEqual(result.settings.templates[0].blocks, changed.blocks);
+  assert.deepEqual(result.settings.profiles, before.profiles);
+});
+
 test('demo chrome hides reconnect even after periodic auth updates', () => {
   assert.match(fs.readFileSync('frontend/demo/demo.css','utf8'), /\.demo-mode #sidebar #btn-auth\s*\{\s*display: none !important/);
 });

@@ -18,8 +18,8 @@
   }));
   let orders, lists, archive, shipment, invoice, documents, counter, syncCounter;
   let tourActive = false;
-  const json = (body, status = 200) => new Response(JSON.stringify(body), {
-    status, headers: { 'Content-Type': 'application/json' },
+  const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), {
+    status, headers: { 'Content-Type': 'application/json', ...headers },
   });
   function reset() {
     orders = initialOrders(); lists = []; archive = []; counter = 0; syncCounter = 0;
@@ -102,6 +102,59 @@
     if (route === '/orders/status') return json({ ok: true, quarantined: 0 });
     if (route === '/orders/auth/status') return json({ authorized: true });
     if (route === '/orders/archive') return json(archive);
+    // Match file operations before the template-id routes (export/import are not IDs).
+    if (route === '/print/document-templates/export' && method === 'GET') {
+      const id = new URLSearchParams(path.split('?')[1] || '').get('template_id');
+      const templates = id === null ? documents.templates : documents.templates.filter(entry => entry.id === id);
+      if (!templates.length) return json({detail:'Template not found'}, 404);
+      const filename = id === null ? 'packing-templates.json' : `packing-template-${id}.json`;
+      return json({format:'packing.document-templates',version:1,exported_at:new Date().toISOString(),
+        templates:templates.map(({id,name,blocks}) => ({id,name,blocks}))}, 200,
+      {'Content-Disposition':`attachment; filename="${filename}"`,'Cache-Control':'no-store'});
+    }
+    if (route === '/print/document-templates/import' && method === 'POST') {
+      const data = body.data;
+      if (!['rename','overwrite'].includes(body.on_conflict)
+        || Object.keys(body).some(key => !['data','on_conflict'].includes(key))
+        || !data || typeof data !== 'object' || Array.isArray(data)
+        || Object.keys(data).some(key => !['format','version','exported_at','templates'].includes(key))
+        || data.format !== 'packing.document-templates' || data.version !== 1
+        || typeof data.exported_at !== 'string' || !Number.isFinite(Date.parse(data.exported_at))
+        || !Array.isArray(data.templates) || !data.templates.length || data.templates.length > 10
+        || !data.templates.every(template => validTemplate(template) && template.name.trim())) {
+        return json({detail:'Nieprawidłowy plik szablonów.'}, 422);
+      }
+      const incoming = data.templates.map(template => ({...template,name:template.name.trim()}));
+      if (new Set(incoming.map(template => template.name)).size !== incoming.length) {
+        return json({detail:'Duplicate template names'}, 422);
+      }
+      // Stage the entire import so a failed limit check cannot partially change state.
+      const settings = JSON.parse(JSON.stringify(documents));
+      const imported = [];
+      let nextCounter = counter;
+      for (const template of incoming) {
+        const item = {...template};
+        const index = settings.templates.findIndex(entry => entry.name.trim() === template.name);
+        if (index !== -1 && body.on_conflict === 'overwrite') {
+          item.id = settings.templates[index].id;
+          settings.templates[index] = item;
+        } else {
+          const names = new Set(settings.templates.map(entry => entry.name.trim()));
+          let number = 2;
+          while (names.has(item.name)) {
+            const suffix = ` (${number++})`;
+            item.name = template.name.slice(0,100 - suffix.length) + suffix;
+          }
+          do { item.id = `template-${++nextCounter}`; }
+          while (settings.templates.some(entry => entry.id === item.id) || incoming.some(entry => entry.id === item.id));
+          settings.templates.push(item);
+        }
+        imported.push(item.id);
+      }
+      if (settings.templates.length > 10) return json({detail:'Maximum 10 templates'}, 422);
+      documents = settings; counter = nextCounter;
+      return json({settings:documents,imported});
+    }
     const collection = route.match(/^\/print\/document-templates\/([^/]+)(?:\/(duplicate|select))?$/);
     if (collection) {
       const id = decodeURIComponent(collection[1]);

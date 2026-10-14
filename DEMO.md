@@ -15,8 +15,10 @@ the full application's behavior. Demo labels remain fictional; the full applicat
 submits parcel sizes to Allegro.
 
 Custom PDF uploads are unavailable in the demo and show an explanatory message.
-The customer-document block editor saves its template in browser memory and previews
-personalized sample PDFs without a backend. Demo PDFs are deliberately simplified:
+The customer-document block editor saves named templates in browser memory, imports
+and exports JSON files offline (rename or overwrite on name conflicts), and previews
+personalized sample PDFs without a backend. Imports preserve the active template;
+reloading clears saved templates. Demo PDFs are deliberately simplified:
 text only, ASCII transliteration, without logo rendering or block formatting. The
 full application uses the production PDF renderer with logos and formatting.
 The Allegro authorization/reconnect button is hidden because the demo has no
