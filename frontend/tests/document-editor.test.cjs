@@ -704,3 +704,136 @@ test('successful duplicate saves newest text and survives pending navigation', a
   assert.equal(context.testContainer.querySelector('.editor-block-text').disabled,false);
 });
 
+class JsonReader {
+  readAsText(file) { this.result = file.text; this.onload(); }
+}
+
+function importFile(container, text) {
+  const input = container.querySelector('.editor-template-import-file');
+  input.files = [{ name: 'templates.json', text }];
+  input.value = 'templates.json';
+  return input.dispatch('change');
+}
+
+test('export current and all use authenticated fetch paths and blob downloads', async () => {
+  const context = loadEditor(); const initial = textSettings();
+  initial.templates[0].id = 'special/id'; initial.profiles.default.active_template_id = 'special/id';
+  const container = mount(context, initial); const calls = []; const downloads = []; const revoked = [];
+  const createElement = context.document.createElement;
+  context.document.createElement = tag => {
+    const node = createElement(tag);
+    if (tag === 'a') node.click = () => downloads.push([node.getAttribute('href'), node.getAttribute('download')]);
+    return node;
+  };
+  context.URL.createObjectURL = blob => { assert.equal(blob.kind, 'json'); return 'blob:download'; };
+  context.URL.revokeObjectURL = url => revoked.push(url);
+  context.setTimeout = fn => { fn(); };
+  context.apiFetch = async path => { calls.push(path); return {ok:true,blob:async()=>({kind:'json'})}; };
+  await container.querySelector('.editor-template-export').click();
+  await container.querySelector('.editor-template-export-all').click();
+  assert.deepEqual(calls, ['/print/document-templates/export?template_id=special%2Fid', '/print/document-templates/export']);
+  assert.deepEqual(downloads, [['blob:download','document-template.json'],['blob:download','document-templates.json']]);
+  assert.deepEqual(revoked, ['blob:download','blob:download']);
+  assert.equal(container.querySelector('a'), null);
+});
+
+test('import posts parsed JSON and conflict strategy, adopts settings and translates result', async () => {
+  for (const strategy of ['rename', 'overwrite']) {
+    const context = loadEditor({FileReader:JsonReader}); const container = mount(context,textSettings());
+    const file = container.querySelector('.editor-template-import-file');
+    assert.equal(file.hasAttribute('hidden'), true); assert.equal(file.getAttribute('accept'), '.json,application/json');
+    let opened = 0; file.click = () => opened++;
+    container.querySelector('.editor-template-import').click(); assert.equal(opened, 1);
+    const conflict = container.querySelector('.editor-import-conflict'); assert.equal(conflict.value, 'rename');
+    conflict.value = strategy; conflict.dispatch('change');
+    const data = {version:1,templates:[{id:'new',name:'Imported',blocks:[{type:'line'}]}]};
+    const pending = importFile(container, JSON.stringify(data)); await Promise.resolve();
+    assert.equal(file.value, '');
+    const call = context.apiCalls[0]; assert.equal(call.path, '/print/document-templates/import');
+    assert.equal(call.options.method, 'POST'); assert.equal(call.options.headers['Content-Type'], 'application/json');
+    assert.deepEqual(JSON.parse(call.options.body), {data,on_conflict:strategy});
+    const saved = settingsFixture({templates:data.templates,profiles:{default:{source:'template',active_template_id:'new'}}});
+    call.resolve({settings:saved, imported:1}); await pending;
+    assert.equal(context.DocumentEditor.draft.templateId, 'new');
+    assert.equal(container.querySelector('.editor-template-name').value, 'Imported');
+    assert.equal(context.onSavedCalls[0], saved);
+    assert.equal(container.querySelector('.editor-status').textContent, 'Zaimportowano szablony: 1');
+    context.setLanguage('en',{root:container});
+    assert.equal(container.querySelector('.editor-status').textContent, 'Templates imported: 1');
+    assert.equal(container.querySelector('.editor-template-export').textContent, 'Export current');
+    assert.equal(container.querySelector('.editor-import-conflict').getAttribute('aria-label'), 'Import template conflicts');
+  }
+});
+
+test('invalid JSON and file read errors do not call the API and translate in place', async () => {
+  for (const Reader of [JsonReader, class { readAsText() { this.onerror(); } }]) {
+    const context = loadEditor({FileReader:Reader}); const container = mount(context,textSettings());
+    await importFile(container, '{invalid');
+    assert.equal(context.apiCalls.length, 0);
+    assert.equal(context.DocumentEditor.draft.blocks[0].text, 'First');
+    context.setLanguage('en',{root:container});
+    assert.equal(container.querySelector('.editor-status').textContent, 'Error: Invalid JSON file.');
+    assert.equal(container.querySelector('.editor-template-import').disabled, false);
+  }
+});
+
+test('import discard cancellation preserves draft without reading or requesting', async () => {
+  let reads = 0;
+  const context = loadEditor({FileReader:class { readAsText() { reads++; } }}); const container = mount(context,textSettings());
+  const text = container.querySelector('.editor-block-text'); text.value = 'Dirty'; text.dispatch('input');
+  let confirms = 0; context.window.confirm = () => { confirms++; return false; };
+  await importFile(container, '{}');
+  assert.equal(confirms, 1); assert.equal(reads, 0); assert.equal(context.apiCalls.length, 0);
+  assert.equal(context.DocumentEditor.draft.blocks[0].text, 'Dirty');
+});
+
+test('import locks collection during file reading and request, including remount and failures', async () => {
+  let reader;
+  const context = loadEditor({FileReader:class { constructor() { reader = this; } readAsText() {} }});
+  let container = mount(context,textSettings(),[{id:'order'}]);
+  const pending = importFile(container, '{}');
+  const assertBusy = () => {
+    for (const selector of ['.editor-template-export','.editor-template-export-all','.editor-template-import','.editor-template-import-file','.editor-import-conflict','.editor-template-select','.editor-save','.editor-preview','.editor-block-text']) assert.equal(container.querySelector(selector).disabled,true,selector);
+  };
+  assertBusy();
+  await container.querySelector('.editor-template-export').click();
+  await importFile(container, '{}'); assert.equal(context.apiCalls.length, 0);
+  mount(context,textSettings(),[{id:'order'}]); container = context.testContainer; assertBusy();
+  reader.result = '{}'; reader.onload(); await Promise.resolve(); assertBusy();
+  context.apiCalls[0].reject(new Error('Import failed')); await pending;
+  assert.equal(container.querySelector('.editor-template-import').disabled,false);
+  assert.equal(container.querySelector('.editor-block-text').value,'First');
+  assert.match(container.querySelector('.editor-status').textContent,/Import failed/);
+});
+
+test('save in flight blocks import and exports, and export reports HTTP and blob API errors', async () => {
+  const context = loadEditor({FileReader:JsonReader}); const container = mount(context,textSettings());
+  container.querySelector('.editor-save').click();
+  await importFile(container, '{}'); await container.querySelector('.editor-template-export').click();
+  assert.equal(context.apiCalls.length, 1);
+  assert.equal(container.querySelector('.editor-template-import').disabled,true);
+  context.apiCalls[0].resolve(textSettings()); await context.DocumentEditor.lastSavePromise;
+  context.apiFetch = async () => ({ok:false,json:async()=>({detail:'Export failed'})});
+  await container.querySelector('.editor-template-export').click();
+  assert.match(container.querySelector('.editor-status').textContent,/Export failed/);
+  // A new clean mount clears that error before testing unsupported blob URLs.
+  const fresh = loadEditor(); const freshContainer = mount(fresh,textSettings());
+  fresh.URL = undefined; fresh.apiFetch = async () => ({ok:true,blob:async()=>({})});
+  await freshContainer.querySelector('.editor-template-export').click();
+  assert.equal(freshContainer.querySelector('.editor-template-export').disabled,false);
+  assert.equal(fresh.DocumentEditor.draft.status,'error');
+});
+
+test('export saves latest dirty template before downloading and aborts on save failure', async () => {
+  const context = loadEditor(); const container = mount(context,textSettings()); let exports = 0;
+  context.apiFetch = async () => { exports++; return {ok:true,blob:async()=>({})}; };
+  const text = container.querySelector('.editor-block-text'); text.value = 'Newest'; text.dispatch('input');
+  const pending = container.querySelector('.editor-template-export').click();
+  assert.equal(JSON.parse(context.apiCalls[0].options.body).template.blocks[0].text,'Newest');
+  assert.equal(exports,0); context.apiCalls[0].resolve(textSettings('Newest')); await pending; assert.equal(exports,1);
+  const next = container.querySelector('.editor-block-text'); next.value = 'Unsaved'; next.dispatch('input');
+  const failed = container.querySelector('.editor-template-export-all').click();
+  context.apiCalls[1].reject(new Error('Save failed')); await failed;
+  assert.equal(exports,1); assert.equal(context.DocumentEditor.draft.blocks[0].text,'Unsaved');
+});
+

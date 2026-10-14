@@ -1,12 +1,13 @@
 """Custom document settings and draft previews. No shipment or OAuth side effects."""
 import logging
+from datetime import UTC, datetime
 from typing import Literal
 from uuid import uuid4
 
 import store
-from documents import DocumentSettings, DocumentTemplate, render_document_pdf
+from documents import DocumentSettings, DocumentTemplate, DocumentTemplateExport, render_document_pdf
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from localization import t
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -29,6 +30,12 @@ class DocumentPreview(BaseModel):
 class DocumentDuplicate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str | None = Field(None, min_length=1, max_length=100)
+
+
+class DocumentImport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    data: DocumentTemplateExport
+    on_conflict: Literal["rename", "overwrite"]
 
 
 def has_content(template: DocumentTemplate) -> bool:
@@ -96,6 +103,48 @@ def find_template(settings: dict, template_id: str) -> dict:
         if template["id"] == template_id:
             return template
     raise HTTPException(status_code=404, detail="Template not found")
+
+
+@router.get("/document-templates/export")
+def export_document_templates(template_id: str | None = None):
+    settings = store.get_document_settings()
+    templates = [find_template(settings, template_id)] if template_id is not None else settings["templates"]
+    filename = f"packing-template-{template_id}.json" if template_id is not None else "packing-templates.json"
+    return JSONResponse(content={
+        "format": "packing.document-templates", "version": 1,
+        "exported_at": datetime.now(UTC).isoformat(),
+        "templates": [{key: template[key] for key in ("id", "name", "blocks")} for template in templates],
+    }, headers={"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store"})
+
+
+@router.post("/document-templates/import")
+def import_document_templates(body: DocumentImport):
+    def mutate(state):
+        settings = state["document_settings"]
+        templates = settings["templates"]
+        imported = []
+        for template in body.data.templates:
+            item = template.model_dump()
+            original = next((entry for entry in templates if entry["name"].strip() == template.name), None)
+            if original is not None and body.on_conflict == "overwrite":
+                item["id"] = original["id"]
+                templates[templates.index(original)] = item
+            else:
+                names = {entry["name"].strip() for entry in templates}
+                number = 2
+                while item["name"] in names:
+                    suffix = f" ({number})"
+                    item["name"] = template.name[:100 - len(suffix)] + suffix
+                    number += 1
+                item["id"] = uuid4().hex
+                templates.append(item)
+            imported.append(item["id"])
+        if len(templates) > 10:
+            raise HTTPException(status_code=422, detail=t("document.import_limit"))
+        saved = DocumentSettings.model_validate(settings).model_dump()
+        state["document_settings"] = saved
+        return {"settings": saved, "imported": imported}
+    return store.transact(mutate)
 
 
 @router.post("/document-templates/{template_id}/duplicate")
