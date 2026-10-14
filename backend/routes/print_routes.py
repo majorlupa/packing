@@ -10,6 +10,7 @@ import io
 import os
 import shutil
 import threading
+import uuid
 from datetime import date
 from pathlib import Path
 
@@ -162,15 +163,15 @@ INPOST_LOCKER_SIZES = {
 }
 
 
-@router.get("/orders/{order_id}/label")
-async def print_label(
+@router.post("/orders/{order_id}/label")
+async def create_label(
     order_id: str,
     length: float | None = Query(None, gt=0, le=500),
     width: float | None = Query(None, gt=0, le=500),
     height: float | None = Query(None, gt=0, le=500),
     weight: float | None = Query(None, gt=0, le=100),
 ):
-    """Create the shipment once (if needed) and return the label PDF.
+    """Create the shipment once, recording its command before contacting Allegro.
 
     Dimensions come from the shipping settings unless this request overrides them.
     For InPost lockers, dimensions are derived from the order's parcel_size (A/B/C).
@@ -180,6 +181,8 @@ async def print_label(
         order = await run_in_threadpool(store.get_order, order_id)
         if order is None:
             raise HTTPException(status_code=404, detail=t("error.order_not_found"))
+        if order.shipment_id:
+            return {"shipment_id": order.shipment_id}
 
         settings = await run_in_threadpool(store.get_shipment_settings)
         package = dict(settings["package"])
@@ -207,8 +210,27 @@ async def print_label(
             tracking_number = order.tracking_number
             created_now = False
             if not shipment_id:
-                shipment_id = await allegro.create_shipment(order, settings["sender"], package)
+                def remember_command(state):
+                    stored = state["orders"].get(order_id)
+                    if stored is None:
+                        raise HTTPException(status_code=404, detail=t("error.order_not_found"))
+                    if not stored.get("shipment_command_id"):
+                        stored["shipment_command_id"] = str(uuid.uuid4())
+                    return stored["shipment_command_id"]
+
+                command_id = await run_in_threadpool(store.transact, remember_command)
+                shipment_id = await allegro.create_shipment(
+                    order, settings["sender"], package, command_id=command_id,
+                )
                 created_now = True
+                # Persist the paid shipment before even attempting tracking lookup.
+                def remember_id(state):
+                    stored = state["orders"].get(order_id)
+                    if stored is not None:
+                        stored["shipment_id"] = shipment_id
+                        stored["shipment_command_id"] = None
+
+                await run_in_threadpool(store.transact, remember_id)
                 tracking_number = await allegro.get_shipment_tracking(shipment_id)
             elif not tracking_number:
                 # The shipment exists but the waybill was never stored — either
@@ -234,13 +256,31 @@ async def print_label(
 
                 await run_in_threadpool(store.transact, remember_shipment)
 
-            label_bytes = await allegro.download_label(shipment_id, package.get("page_size", "A6"))
+
         except allegro.AllegroError as exc:
             raise to_http_exception(exc)
         except httpx.HTTPError as exc:
             raise HTTPException(status_code=502, detail=t("common.allegro_unreachable", error=exc))
 
-    return Response(content=label_bytes, media_type="application/pdf")
+    return {"shipment_id": shipment_id, "tracking_number": tracking_number}
+
+
+@router.get("/orders/{order_id}/label")
+async def print_label(order_id: str):
+    """Download only; safe GET requests must never buy shipments."""
+    order = await run_in_threadpool(store.get_order, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail=t("error.order_not_found"))
+    if not order.shipment_id:
+        raise HTTPException(status_code=409, detail="Shipment has not been created.")
+    settings = await run_in_threadpool(store.get_shipment_settings)
+    try:
+        label_bytes = await allegro.download_label(order.shipment_id, settings["package"].get("page_size", "A6"))
+    except allegro.AllegroError as exc:
+        raise to_http_exception(exc)
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=t("common.allegro_unreachable", error=exc))
+    return Response(content=label_bytes, media_type="application/pdf", headers={"Cache-Control": "no-store"})
 
 
 @router.get("/orders/{order_id}/shipment")

@@ -38,6 +38,8 @@ class Order(BaseModel):
     delivery_method_id: Optional[str] = None
     # Shipment management UUID (set after creating shipment via API)
     shipment_id: Optional[str] = None
+    # Durable creation intent; retained after uncertain carrier/network failures.
+    shipment_command_id: Optional[str] = None
     parcel_size: Optional[Literal["A", "B", "C"]] = None
 
     @property

@@ -274,11 +274,11 @@ def _dry_run_label(page_size: str) -> bytes:
     return out.getvalue()
 
 
-async def create_shipment(order, sender: dict, package: dict) -> str:
+async def create_shipment(order, sender: dict, package: dict, *, command_id: str | None = None) -> str:
     """Create a shipment via Allegro shipment management. Returns shipment UUID."""
     if dry_run_enabled():
         logger.warning("PACKING_SHIPMENT_DRY_RUN=1: pomijam tworzenie przesyłki w Allegro (%s)", order.allegro_id)
-        return f"{DRY_RUN_PREFIX}{uuid.uuid4()}"
+        return f"{DRY_RUN_PREFIX}{command_id or uuid.uuid4()}"
     token = await _access_token()
 
     # The legacy sender argument is retained for callers/settings compatibility.
@@ -288,6 +288,15 @@ async def create_shipment(order, sender: dict, package: dict) -> str:
         "Accept": "application/vnd.allegro.public.v1+json",
     }
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        # A previous attempt may have reached Allegro before our connection died.
+        # Resolve its durable command before considering another submission.
+        if command_id:
+            previous = await client.get(
+                f"{API_URL}/shipment-management/shipments/create-commands/{command_id}",
+                headers=headers,
+            )
+            if previous.status_code != 404:
+                return await _poll_shipment(client, token, command_id, previous)
         proposal = await client.get(
             f"{API_URL}/shipment-management/delivery-proposals/{order.allegro_id}",
             headers=headers,
@@ -322,6 +331,8 @@ async def create_shipment(order, sender: dict, package: dict) -> str:
         # The browser prints PDFs. Page size belongs to the label-download request.
         shipment_input["labelFormat"] = "PDF"
         payload = {"input": shipment_input}
+        if command_id:
+            payload["commandId"] = command_id
         r = await client.post(
             f"{API_URL}/shipment-management/shipments/create-commands",
             headers={
@@ -338,12 +349,19 @@ async def create_shipment(order, sender: dict, package: dict) -> str:
                 status=r.status_code,
                 detail=_shipment_error(r),
             ))
-        command_id = _json_object(r, "allegro.what.shipment_create").get("commandId")
-        if not isinstance(command_id, str) or not command_id:
+        returned_id = _json_object(r, "allegro.what.shipment_create").get("commandId")
+        if not isinstance(returned_id, str) or not returned_id:
             raise AllegroError(t("allegro.no_command_id"))
+        if command_id and returned_id != command_id:
+            raise AllegroError(t("allegro.no_command_id"))
+        return await _poll_shipment(client, token, returned_id)
 
-        # Poll for result
-        for _ in range(15):
+
+async def _poll_shipment(client, token: str, command_id: str, initial=None) -> str:
+    """Resume a known command without creating another shipment."""
+    for attempt in range(15):
+        r = initial if attempt == 0 else None
+        if r is None:
             await asyncio.sleep(2)
             r = await client.get(
                 f"{API_URL}/shipment-management/shipments/create-commands/{command_id}",
@@ -352,23 +370,23 @@ async def create_shipment(order, sender: dict, package: dict) -> str:
                     "Accept": "application/vnd.allegro.public.v1+json",
                 },
             )
-            if not r.is_success:
-                raise AllegroError(t(
-                    "allegro.api_error",
-                    what=t("allegro.op.shipment_status"),
-                    status=r.status_code,
-                    detail=r.text[:300],
-                ))
-            data = _json_object(r, "allegro.what.shipment_status")
-            status = data.get("status")
-            if status == "SUCCESS":
-                shipment_id = data.get("shipmentId")
-                if not isinstance(shipment_id, str) or not shipment_id:
-                    raise AllegroError(t("allegro.no_shipment_id"))
-                return shipment_id
-            if status == "ERROR":
-                msg = _error_messages(data.get("errors")) or "unknown"
-                raise AllegroError(t("allegro.shipment_creation_failed", detail=msg))
+        if not r.is_success:
+            raise AllegroError(t(
+                "allegro.api_error",
+                what=t("allegro.op.shipment_status"),
+                status=r.status_code,
+                detail=r.text[:300],
+            ))
+        data = _json_object(r, "allegro.what.shipment_status")
+        status = data.get("status")
+        if status == "SUCCESS":
+            shipment_id = data.get("shipmentId")
+            if not isinstance(shipment_id, str) or not shipment_id:
+                raise AllegroError(t("allegro.no_shipment_id"))
+            return shipment_id
+        if status == "ERROR":
+            msg = _error_messages(data.get("errors")) or "unknown"
+            raise AllegroError(t("allegro.shipment_creation_failed", detail=msg))
 
     raise AllegroError(t("allegro.shipment_timeout"))
 

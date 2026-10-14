@@ -351,7 +351,7 @@ def test_label_size_requirement_is_localized(app_env, client):
         "o-1": sample_order(courier="Paczkomat InPost"),
     }))
     # A locker order with no size chosen yet must be refused before any carrier call.
-    english = client.get("/api/print/orders/o-1/label", headers={"Accept-Language": "en"})
+    english = client.post("/api/print/orders/o-1/label", headers={"Accept-Language": "en"})
     assert english.status_code == 400
     assert english.json()["detail"] == "Choose a parcel size (A, B or C) for the InPost parcel locker."
 

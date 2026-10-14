@@ -554,7 +554,7 @@ def _fake_allegro(monkeypatch, order):
 
     calls = {"create": 0, "download": 0}
 
-    async def fake_create(order_arg, sender, package):
+    async def fake_create(order_arg, sender, package, *, command_id=None):
         calls["create"] += 1
         await asyncio.sleep(0.05)  # widen the window a double click would exploit
         calls["last_package"] = package
@@ -572,7 +572,7 @@ def _fake_allegro(monkeypatch, order):
 
 def test_label_without_authorization_is_401_not_404(app_env, client):
     app_env.write_state(app_env.default_state({"o-1": sample_order()}))
-    assert client.get("/api/print/orders/o-1/label").status_code == 401
+    assert client.post("/api/print/orders/o-1/label").status_code == 401
 
 
 def test_label_upstream_failure_is_502(app_env, client, monkeypatch):
@@ -581,11 +581,11 @@ def test_label_upstream_failure_is_502(app_env, client, monkeypatch):
     app_env.write_state(app_env.default_state({"o-1": sample_order()}))
     allegro._token = "test-token"
 
-    async def boom(order, sender, package):
+    async def boom(order, sender, package, *, command_id=None):
         raise allegro.AllegroError("Allegro create shipment 500: nope")
 
     monkeypatch.setattr(allegro, "create_shipment", boom)
-    response = client.get("/api/print/orders/o-1/label")
+    response = client.post("/api/print/orders/o-1/label")
     assert response.status_code == 502
     assert "nope" in response.json()["detail"]
 
@@ -601,11 +601,11 @@ def test_two_parallel_label_requests_create_one_shipment(app_env, monkeypatch):
         transport = httpx.ASGITransport(app=app_env.app, raise_app_exceptions=False)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             return await asyncio.gather(
-                c.get(
+                c.post(
                     "/api/print/orders/o-1/label",
                     headers={"Authorization": "Bearer test-access-token-for-packing-api-2026"},
                 ),
-                c.get(
+                c.post(
                     "/api/print/orders/o-1/label",
                     headers={"Authorization": "Bearer test-access-token-for-packing-api-2026"},
                 ),
@@ -614,7 +614,8 @@ def test_two_parallel_label_requests_create_one_shipment(app_env, monkeypatch):
     responses = asyncio.run(go())
     assert [r.status_code for r in responses] == [200, 200]
     assert calls["create"] == 1
-    assert calls["download"] == 2
+    assert calls["download"] == 0
+    assert all(r.json()["shipment_id"] == "shipment-uuid" for r in responses)
 
     order = json.loads(app_env.state_file.read_text(encoding="utf-8"))["orders"]["o-1"]
     assert order["shipment_id"] == "shipment-uuid"
@@ -629,9 +630,10 @@ def test_label_uses_saved_package_settings_when_no_override(app_env, client, mon
     client.post("/api/print/shipment-settings", json={"package": {
         "length": 33, "width": 22, "height": 11, "weight": 3.0, "page_size": "A4"}})
 
-    assert client.get("/api/print/orders/o-1/label").status_code == 200
+    assert client.post("/api/print/orders/o-1/label").status_code == 200
     assert calls["last_package"]["length"] == 33
     assert calls["last_package"]["height"] == 11
+    assert client.get("/api/print/orders/o-1/label").status_code == 200
     assert calls["page_size"] == "A4"
 
 
@@ -642,14 +644,14 @@ def test_label_query_params_override_settings(app_env, client, monkeypatch):
     allegro._token = "test-token"
     calls = _fake_allegro(monkeypatch, None)
 
-    assert client.get("/api/print/orders/o-1/label?length=40&width=30&height=20&weight=5").status_code == 200
+    assert client.post("/api/print/orders/o-1/label?length=40&width=30&height=20&weight=5").status_code == 200
     assert calls["last_package"]["length"] == 40
     assert calls["last_package"]["weight"] == 5
 
 
 def test_label_rejects_bad_dimensions(app_env, client):
     app_env.write_state(app_env.default_state({"o-1": sample_order()}))
-    assert client.get("/api/print/orders/o-1/label?length=0").status_code == 422
+    assert client.post("/api/print/orders/o-1/label?length=0").status_code == 422
 
 
 def test_repeated_label_request_reuses_the_shipment(app_env, client, monkeypatch):
@@ -671,7 +673,7 @@ def test_label_keeps_a_concurrent_status_change(app_env, client, monkeypatch):
     app_env.write_state(app_env.default_state({"o-1": sample_order()}))
     allegro._token = "test-token"
 
-    async def fake_create(order, sender, package):
+    async def fake_create(order, sender, package, *, command_id=None):
         # The operator finishes the order while Allegro is creating the shipment.
         def mark_done(state):
             state["orders"]["o-1"]["status"] = "done"
@@ -685,7 +687,7 @@ def test_label_keeps_a_concurrent_status_change(app_env, client, monkeypatch):
     monkeypatch.setattr(allegro, "create_shipment", fake_create)
     monkeypatch.setattr(allegro, "download_label", fake_download)
 
-    assert client.get("/api/print/orders/o-1/label").status_code == 200
+    assert client.post("/api/print/orders/o-1/label").status_code == 200
     order = json.loads(app_env.state_file.read_text(encoding="utf-8"))["orders"]["o-1"]
     assert order["status"] == "done"
     assert order["shipment_id"] == "shipment-uuid"

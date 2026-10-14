@@ -1,7 +1,31 @@
 const API = '/api';
-let accessToken = '';
+const ACCESS_TOKEN_STORAGE_KEY = 'weles.accessToken';
+let accessToken = readStoredAccessToken();
 let accessTokenPrompt = null;
 let appReady = false;
+
+function readStoredAccessToken() {
+  try {
+    return sessionStorage.getItem(ACCESS_TOKEN_STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function setAccessToken(token) {
+  accessToken = token;
+  try {
+    if (token) sessionStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, token);
+    else sessionStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
+  } catch {
+    // Authentication still works when browser storage is unavailable.
+  }
+}
+
+// No logout UI exists yet; use this helper to discard operator credentials.
+function clearAccessToken() {
+  setAccessToken('');
+}
 
 // ---- i18n catalog ----
 // Every app-owned string lives here. Keys are flat and grouped by area. A value
@@ -650,7 +674,7 @@ async function promptForAccessToken() {
     accessTokenPrompt = Promise.resolve().then(() => {
       const entered = window.prompt(t('token.prompt'));
       if (!entered || !entered.trim()) throw new Error(t('token.required'));
-      accessToken = entered.trim();
+      setAccessToken(entered.trim());
       return accessToken;
     }).finally(() => { accessTokenPrompt = null; });
   }
@@ -667,12 +691,14 @@ async function apiFetch(path, options = {}) {
     return fetch(`${API}${path}`, { ...options, headers });
   };
 
-  let res = await send(accessToken);
+  const sentToken = accessToken;
+  let res = await send(sentToken);
+  if (res.status === 401 && accessToken === sentToken) clearAccessToken();
   if (res.status !== 401 || res.headers.get('X-Packing-Auth-Required') !== '1') return res;
 
   const token = await promptForAccessToken();
   res = await send(token);
-  if (res.status === 401 && res.headers.get('X-Packing-Auth-Required') === '1') accessToken = '';
+  if (res.status === 401 && accessToken === token) clearAccessToken();
   return res;
 }
 
@@ -706,13 +732,15 @@ function reportError(prefix, err) {
 
 // PDFs are fetched first so a failure (401/502/404) shows up as a message instead of
 // a browser tab full of JSON. `options` lets callers POST a draft (document preview)
-// through the same popup-timing and error handling.
-async function openPdf(path, options = {}) {
+// through the same popup-timing and error handling. beforeFetch can create a
+// label after reserving the popup, before downloading its PDF.
+async function openPdf(path, options = {}, beforeFetch = null) {
   // Reserve the tab during the click; browsers block popups after a slow API call.
   const printTab = window.open('about:blank', '_blank');
   if (!printTab) throw new Error(t('print.popupBlocked'));
   printTab.opener = null;
   try {
+    if (beforeFetch) await beforeFetch();
     const res = await apiFetch(path, options);
     if (!res.ok) {
       let detail = `${res.status} ${res.statusText}`;
@@ -1335,7 +1363,8 @@ function renderPackingCard(el) {
     labelBusy = true;
     btn.textContent = t('packing.generatingLabel');
     try {
-      await openPdf(`/print/orders/${order.id}/label?${params}`);
+      const labelPath = `/print/orders/${order.id}/label`;
+      await openPdf(labelPath, {}, () => api(`${labelPath}?${params}`, { method: 'POST' }));
       // Only claim the label is printed once the PDF actually came back.
       labelReady = true;
       labelBusy = false;
@@ -1873,7 +1902,7 @@ async function boot() {
         form.classList.add('hidden');
         retry.classList.add('hidden');
         if (result.access_token) {
-          accessToken = result.access_token;
+          setAccessToken(result.access_token);
           document.getElementById('setup-access-token').value = result.access_token;
           document.getElementById('setup-success').classList.remove('hidden');
           setupMessage(() => t('setup.savedMsg'));
