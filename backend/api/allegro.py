@@ -15,7 +15,7 @@ import asyncio
 import io
 import time
 import threading
-from functools import wraps
+from functools import partial, wraps
 import httpx
 from starlette.concurrency import run_in_threadpool
 from typing import List
@@ -23,7 +23,11 @@ from models.order import Order, OrderItem
 import uuid
 
 import store
-from localization import t
+from localization import t as translate
+
+# API exceptions are internal diagnostics, not user-facing messages. Keep their
+# surrounding prose English while preserving upstream details verbatim.
+t = partial(translate, lang="en")
 
 logger = logging.getLogger("packing.allegro")
 
@@ -169,13 +173,18 @@ async def _access_token() -> str:
     return _token
 
 
-def to_http_exception(exc: AllegroError):
+def to_http_exception(exc: AllegroError | httpx.HTTPError, *, lang: str | None = None):
     """Map an Allegro failure onto the right HTTP status for the browser."""
     from fastapi import HTTPException
 
+    logger.warning("Allegro request failed (%s): %s", type(exc).__name__, exc)
     if isinstance(exc, AllegroNotAuthorized):
-        return HTTPException(status_code=401, detail=str(exc))
-    return HTTPException(status_code=502, detail=f"Allegro: {exc}")
+        status, code = 401, "allegro.not_authorized"
+    elif isinstance(exc, httpx.HTTPError):
+        status, code = 502, "common.allegro_unreachable"
+    else:
+        status, code = 502, "allegro.request_failed"
+    return HTTPException(status_code=status, detail={"code": code, "message": translate(code, lang=lang)})
 
 
 
@@ -235,8 +244,7 @@ def _shipment_error(response: httpx.Response) -> str:
 def _json_object(response: httpx.Response, what: str) -> dict:
     """Parse an Allegro body; a gateway HTML page must become a 502, not a 500.
 
-    ``what`` is a message key naming the payload, so the error can be reported in
-    the request's language while the upstream body stays untranslated.
+    ``what`` names the payload in English for server-side diagnostics.
     """
     try:
         payload = response.json()
@@ -268,7 +276,7 @@ def _dry_run_label(page_size: str) -> bytes:
     width, height = {"A4": (595, 842), "A6": (298, 420)}.get(page_size.upper(), (298, 420))
     writer = PdfWriter()
     writer.add_blank_page(width=width, height=height)
-    writer.add_metadata({"/Title": t("label.dry_run_title"), "/Producer": "Weles"})
+    writer.add_metadata({"/Title": translate("label.dry_run_title"), "/Producer": "Weles"})
     out = io.BytesIO()
     writer.write(out)
     return out.getvalue()

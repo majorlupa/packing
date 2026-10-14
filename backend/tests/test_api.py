@@ -104,7 +104,8 @@ def test_sync_without_authorization_is_401(app_env, client):
 
     response = client.post("/api/orders/sync")
     assert response.status_code == 401
-    assert "Autoryzuj" in response.json()["detail"]
+    assert response.json()["detail"]["code"] == "allegro.not_authorized"
+    assert "Autoryzuj" in response.json()["detail"]["message"]
 
 
 def test_sync_with_a_non_json_success_page_is_502(app_env, client, monkeypatch):
@@ -137,7 +138,7 @@ def test_sync_with_a_non_json_success_page_is_502(app_env, client, monkeypatch):
 
     response = client.post("/api/orders/sync")
     assert response.status_code == 502
-    assert "nieprawidłowe dane" in response.json()["detail"]
+    assert response.json()["detail"]["code"] == "allegro.request_failed"
 
 
 def _checkout_form(allegro_id):
@@ -230,7 +231,7 @@ def test_sync_refuses_truncated_results_without_mutating_state(app_env, client, 
     before = app_env.state_file.read_bytes()
     response = client.post("/api/orders/sync")
     assert response.status_code == 502
-    assert "Niepełna synchronizacja" in response.json()["detail"]
+    assert response.json()["detail"]["code"] == "allegro.request_failed"
     assert fake.offsets == [0, 100, 200]
     assert app_env.state_file.read_bytes() == before
 
@@ -587,7 +588,8 @@ def test_label_upstream_failure_is_502(app_env, client, monkeypatch):
     monkeypatch.setattr(allegro, "create_shipment", boom)
     response = client.post("/api/print/orders/o-1/label")
     assert response.status_code == 502
-    assert "nope" in response.json()["detail"]
+    assert response.json()["detail"]["code"] == "allegro.request_failed"
+    assert "nope" not in response.text
 
 
 def test_two_parallel_label_requests_create_one_shipment(app_env, monkeypatch):
@@ -859,4 +861,4 @@ def test_non_json_token_responses_are_allegro_errors(app_env, client, monkeypatc
     )
     response = client.post("/api/orders/sync")
     assert response.status_code == 502
-    assert "odświeżenie tokenu" in response.json()["detail"]
+    assert response.json()["detail"]["code"] == "allegro.request_failed"

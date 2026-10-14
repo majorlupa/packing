@@ -257,10 +257,8 @@ async def create_label(
                 await run_in_threadpool(store.transact, remember_shipment)
 
 
-        except allegro.AllegroError as exc:
+        except (allegro.AllegroError, httpx.HTTPError) as exc:
             raise to_http_exception(exc)
-        except httpx.HTTPError as exc:
-            raise HTTPException(status_code=502, detail=t("common.allegro_unreachable", error=exc))
 
     return {"shipment_id": shipment_id, "tracking_number": tracking_number}
 
@@ -276,10 +274,8 @@ async def print_label(order_id: str):
     settings = await run_in_threadpool(store.get_shipment_settings)
     try:
         label_bytes = await allegro.download_label(order.shipment_id, settings["package"].get("page_size", "A6"))
-    except allegro.AllegroError as exc:
+    except (allegro.AllegroError, httpx.HTTPError) as exc:
         raise to_http_exception(exc)
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=t("common.allegro_unreachable", error=exc))
     return Response(content=label_bytes, media_type="application/pdf", headers={"Cache-Control": "no-store"})
 
 

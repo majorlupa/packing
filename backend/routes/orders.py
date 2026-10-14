@@ -117,9 +117,7 @@ async def sync_from_allegro():
         else:
             raise to_http_exception(exc)
     except (allegro.AllegroError, httpx.HTTPError) as exc:
-        if isinstance(exc, allegro.AllegroError):
-            raise to_http_exception(exc)
-        raise HTTPException(status_code=502, detail=t("common.allegro_unreachable", error=exc))
+        raise to_http_exception(exc)
 
     def mutate(state):
         # Read the archive inside the transaction: a concurrent "end of day" must not be missed.
@@ -240,8 +238,6 @@ async def auth_callback(
         return _oauth_error_page(language, t("oauth.missing_code", lang=language))
     try:
         await allegro.exchange_code(code)
-    except allegro.AllegroError as exc:
-        raise to_http_exception(exc)
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=t("common.allegro_unreachable", error=exc))
+    except (allegro.AllegroError, httpx.HTTPError) as exc:
+        raise to_http_exception(exc, lang=language)
     return RedirectResponse(f"{UI_BASE_URL}/")

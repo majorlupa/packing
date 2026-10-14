@@ -26,8 +26,12 @@ current_language: ContextVar[str] = ContextVar("packing_language", default=DEFAU
 MESSAGES: dict[str, dict[str, str]] = {
     # --- shared ---
     "common.allegro_unreachable": {
-        "pl": "Brak łączności z Allegro: {error}",
-        "en": "Cannot reach Allegro: {error}",
+        "pl": "Brak łączności z Allegro. Spróbuj ponownie.",
+        "en": "Cannot reach Allegro. Please try again.",
+    },
+    "allegro.request_failed": {
+        "pl": "Nie udało się wykonać operacji w Allegro. Spróbuj ponownie.",
+        "en": "The Allegro request failed. Please try again.",
     },
     "error.order_not_found": {
         "pl": "Nie znaleziono zamówienia.",

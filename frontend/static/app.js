@@ -62,6 +62,10 @@ const MESSAGES = {
     'common.revertTitle': 'Cofnij do oczekujących',
     'common.copyId': 'Kopiuj ID',
     'common.errorPrefix': 'Błąd',
+    'common.requestFailed': 'Nie udało się wykonać żądania. Spróbuj ponownie.',
+    'allegro.not_authorized': 'Połącz ponownie Allegro, aby kontynuować.',
+    'common.allegro_unreachable': 'Nie można połączyć się z Allegro. Spróbuj ponownie później.',
+    'allegro.request_failed': 'Żądanie do Allegro nie powiodło się. Spróbuj ponownie.',
 
     'unit.order': { one: 'zamówienie', few: 'zamówienia', many: 'zamówień' },
     'unit.product': { one: 'produkt', few: 'produkty', many: 'produktów' },
@@ -266,6 +270,10 @@ const MESSAGES = {
     'common.revertTitle': 'Return to pending',
     'common.copyId': 'Copy ID',
     'common.errorPrefix': 'Error',
+    'common.requestFailed': 'The request could not be completed. Please try again.',
+    'allegro.not_authorized': 'Reconnect Allegro to continue.',
+    'common.allegro_unreachable': 'Allegro cannot be reached. Please try again later.',
+    'allegro.request_failed': 'The Allegro request failed. Please try again.',
 
     'unit.order': { one: 'order', other: 'orders' },
     'unit.product': { one: 'product', other: 'products' },
@@ -688,7 +696,9 @@ async function apiFetch(path, options = {}) {
     // backend which language to answer in.
     headers.set('Accept-Language', currentLanguage);
     if (token) headers.set('Authorization', `Bearer ${token}`);
-    return fetch(`${API}${path}`, { ...options, headers });
+    return fetch(`${API}${path}`, { ...options, headers }).catch(() => {
+      throw new Error(t('common.requestFailed'));
+    });
   };
 
   const sentToken = accessToken;
@@ -710,6 +720,45 @@ function esc(value) {
   ));
 }
 
+// Known app-owned codes follow the selected language. Older plain-text errors
+// remain supported; malformed bodies never turn into JSON or HTTP status text.
+function apiErrorMessage(payload) {
+  const detail = payload && (payload.detail ?? payload.message);
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    if (['allegro.not_authorized', 'common.allegro_unreachable', 'allegro.request_failed'].includes(detail.code)) {
+      return t(detail.code);
+    }
+    return typeof detail.message === 'string' && detail.message.trim()
+      ? detail.message : t('common.requestFailed');
+  }
+  return typeof detail === 'string' && detail.trim() ? detail : t('common.requestFailed');
+}
+
+async function responseError(res) {
+  let payload = null;
+  try { payload = await res.json(); } catch { /* HTML, empty or malformed response */ }
+  return new Error(apiErrorMessage(payload));
+}
+
+let toastTimer = null;
+function showToast(message, kind = 'info') {
+  const info = document.getElementById('toast-info');
+  const error = document.getElementById('toast-error');
+  if (!info || !error) return;
+  clearTimeout(toastTimer);
+  [info, error].forEach(node => {
+    clearStaticText(node);
+    node.textContent = '';
+  });
+  const node = kind === 'error' ? error : info;
+  bindStaticText(node, typeof message === 'function' ? message : () => String(message));
+  toastTimer = setTimeout(() => {
+    clearStaticText(node);
+    node.textContent = '';
+    toastTimer = null;
+  }, kind === 'error' ? 8000 : 5000);
+}
+
 // All API calls go through here: a failed request raises instead of silently
 // re-rendering the same stale queue.
 async function api(path, options = {}) {
@@ -720,14 +769,13 @@ async function api(path, options = {}) {
     try { payload = await res.json(); } catch { payload = null; }
   }
   if (!res.ok) {
-    const detail = payload && (payload.detail || payload.message);
-    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail || `${res.status} ${res.statusText}`));
+    throw new Error(apiErrorMessage(payload));
   }
   return payload;
 }
 
 function reportError(prefix, err) {
-  alert(`${prefix}\n\n${err && err.message ? err.message : err}`);
+  showToast(`${prefix}\n${err && typeof err.message === 'string' ? err.message : t('common.requestFailed')}`, 'error');
 }
 
 // PDFs are fetched first so a failure (401/502/404) shows up as a message instead of
@@ -743,12 +791,7 @@ async function openPdf(path, options = {}, beforeFetch = null) {
     if (beforeFetch) await beforeFetch();
     const res = await apiFetch(path, options);
     if (!res.ok) {
-      let detail = `${res.status} ${res.statusText}`;
-      try {
-        const payload = await res.json();
-        if (payload && payload.detail) detail = payload.detail;
-      } catch { /* not JSON — keep the status line */ }
-      throw new Error(detail);
+      throw await responseError(res);
     }
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
@@ -1692,10 +1735,8 @@ async function renderSettingsDocuments(panel) {
       setText(panel.querySelector('#btn-doc-pick'), 'settings.docReplace');
       attachDeleteHandler(panel);
     } else {
-      const err = await res.json();
-      // err.detail is upstream data — show it verbatim; only the generic
-      // fallback follows the language.
-      showNote(note, err.detail ? '✗ ' + err.detail : () => '✗ ' + t('settings.error'));
+      const err = await responseError(res);
+      showNote(note, '✗ ' + err.message);
     }
   });
 
@@ -1772,7 +1813,7 @@ document.getElementById('btn-zakoncz').addEventListener('click', async () => {
   if (!confirm(t('day.confirm'))) return;
   const doneOrders = state.orders.filter(o => o.status === 'done');
   if (!doneOrders.length) {
-    alert(t('day.noneReady'));
+    showToast(() => t('day.noneReady'));
     return;
   }
   const missing = doneOrders.filter(o => !o.shipment_id && !o.tracking_number);
@@ -1809,7 +1850,7 @@ document.getElementById('btn-auth').addEventListener('click', async () => {
     const data = await api('/orders/auth/url');
     window.location.href = data.url;
   } catch (e) {
-    alert(`${t('common.errorPrefix')}: ${e.message}`);
+    reportError(t('common.errorPrefix'), e);
   }
 });
 

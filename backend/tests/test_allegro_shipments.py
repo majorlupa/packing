@@ -298,7 +298,8 @@ def test_sync_does_not_hide_upstream_failure_behind_mock_orders(app_env, client,
     monkeypatch.setattr(allegro, 'fetch_orders', failing)
     response = client.post('/api/orders/sync')
     assert response.status_code == 502
-    assert '503' in response.json()['detail']
+    assert response.json()['detail']['code'] == 'allegro.request_failed'
+    assert '503' not in response.text
     assert client.get('/api/orders/').json() == []
 
 

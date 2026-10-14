@@ -82,8 +82,8 @@ def test_translation_formats_parameters_and_keeps_upstream_text():
     # The frontend's English button is "Connect Allegro" (nav.authorizeAllegro).
     assert "Connect Allegro" in detail
     assert "Authorize Allegro" not in detail
-    assert localization.t("common.allegro_unreachable", error="boom").endswith("boom")
-    assert localization.t("common.allegro_unreachable", lang="en", error="boom") == "Cannot reach Allegro: boom"
+    assert "boom" not in localization.t("common.allegro_unreachable", error="boom")
+    assert localization.t("common.allegro_unreachable", lang="en", error="boom") == "Cannot reach Allegro. Please try again."
 
 
 def test_unknown_key_is_visible_instead_of_silently_empty():
@@ -339,11 +339,17 @@ def test_sync_connectivity_failure_is_localized(app_env, client, monkeypatch):
 
     polish = client.post("/api/orders/sync")
     assert polish.status_code == 502
-    assert polish.json()["detail"].startswith("Brak łączności z Allegro:")
+    assert polish.json()["detail"] == {
+        "code": "common.allegro_unreachable",
+        "message": "Brak łączności z Allegro. Spróbuj ponownie.",
+    }
 
     english = client.post("/api/orders/sync", headers={"Accept-Language": "en"})
     assert english.status_code == 502
-    assert english.json()["detail"] == "Cannot reach Allegro: connection refused"
+    assert english.json()["detail"] == {
+        "code": "common.allegro_unreachable",
+        "message": "Cannot reach Allegro. Please try again.",
+    }
 
 
 def test_label_size_requirement_is_localized(app_env, client):
@@ -523,11 +529,12 @@ def test_oauth_state_still_single_use_with_the_language_carry(app_env, client, m
 def test_allegro_not_authorized_message_is_localized(app_env, client):
     polish = client.post("/api/orders/sync")
     assert polish.status_code == 401
-    assert polish.json()["detail"] == "Allegro nie jest autoryzowane. Kliknij 'Autoryzuj Allegro'."
+    assert polish.json()["detail"]["code"] == "allegro.not_authorized"
+    assert polish.json()["detail"]["message"] == "Allegro nie jest autoryzowane. Kliknij 'Autoryzuj Allegro'."
 
     english = client.post("/api/orders/sync", headers={"Accept-Language": "en"})
     assert english.status_code == 401
-    assert english.json()["detail"] == "Allegro is not authorized. Click 'Connect Allegro'."
+    assert english.json()["detail"]["message"] == "Allegro is not authorized. Click 'Connect Allegro'."
 
 
 def test_allegro_invalid_data_message_is_localized(app_env, client, monkeypatch):
@@ -562,7 +569,10 @@ def test_allegro_invalid_data_message_is_localized(app_env, client, monkeypatch)
 
     english = client.post("/api/orders/sync", headers={"Accept-Language": "en"})
     assert english.status_code == 502
-    assert english.json()["detail"].endswith("Allegro returned invalid data (order list).")
+    assert english.json()["detail"] == {
+        "code": "allegro.request_failed",
+        "message": "The Allegro request failed. Please try again.",
+    }
 
 
 def test_allegro_incomplete_sync_message_is_localized(app_env, client, monkeypatch):
@@ -610,13 +620,13 @@ def test_allegro_incomplete_sync_message_is_localized(app_env, client, monkeypat
 
     english = client.post("/api/orders/sync", headers={"Accept-Language": "en"})
     assert english.status_code == 502
-    assert english.json()["detail"] == (
-        "Allegro: Incomplete sync: the limit of 100 orders was exceeded. "
-        "No results from this sync were saved."
-    )
+    assert english.json()["detail"] == {
+        "code": "allegro.request_failed",
+        "message": "The Allegro request failed. Please try again.",
+    }
 
 
-def test_allegro_shipment_error_hint_is_localized(app_env):
+def test_allegro_shipment_error_hint_is_english_diagnostic(app_env):
     import api.allegro as allegro
     import localization
 
@@ -624,7 +634,7 @@ def test_allegro_shipment_error_hint_is_localized(app_env):
         def json(self):
             return {"errors": []}
 
-    assert "Wysyłam z Allegro" in allegro._shipment_error(FakeResponse())
+    assert "Ship with Allegro" in allegro._shipment_error(FakeResponse())
     with localization.language_scope("en"):
         hint = allegro._shipment_error(FakeResponse())
     assert hint == "Check the 'Ship with Allegro' settings and the app's shipment permissions."
@@ -727,7 +737,7 @@ def _allegro_error_message(coro, language):
     return str(excinfo.value)
 
 
-def test_allegro_token_refresh_wrapper_is_localized(app_env, monkeypatch):
+def test_allegro_token_refresh_wrapper_is_english_diagnostic(app_env, monkeypatch):
     import httpx
 
     allegro = _install_allegro_transport(
@@ -738,26 +748,26 @@ def test_allegro_token_refresh_wrapper_is_localized(app_env, monkeypatch):
     allegro._expires_at = 0.0
 
     message = _allegro_error_message(allegro._access_token(), "pl")
-    assert message.startswith("Błąd Allegro")
-    assert "odświeżenie tokenu" in message
+    assert message.startswith("Allegro")
+    assert "refresh token" in message
     assert "503" in message
     assert "upstream down" in message  # raw upstream text stays verbatim
 
 
-def test_allegro_token_exchange_wrapper_is_localized(app_env, monkeypatch):
+def test_allegro_token_exchange_wrapper_is_english_diagnostic(app_env, monkeypatch):
     import httpx
 
     allegro = _install_allegro_transport(
         monkeypatch, lambda request: httpx.Response(500, text="bad code")
     )
     message = _allegro_error_message(allegro.exchange_code("code"), "pl")
-    assert message.startswith("Błąd Allegro")
-    assert "wymiana tokenu" in message
+    assert message.startswith("Allegro")
+    assert "token exchange" in message
     assert "500" in message
     assert "bad code" in message
 
 
-def test_allegro_label_api_wrapper_is_localized(app_env, monkeypatch):
+def test_allegro_label_api_wrapper_is_english_diagnostic(app_env, monkeypatch):
     import httpx
 
     allegro = _install_allegro_transport(
@@ -766,8 +776,8 @@ def test_allegro_label_api_wrapper_is_localized(app_env, monkeypatch):
     allegro._token = "test-token"
 
     polish = _allegro_error_message(allegro.download_label("shipment-1"), "pl")
-    assert polish.startswith("Błąd Allegro")
-    assert "pobranie etykiety" in polish
+    assert polish.startswith("Allegro")
+    assert "label" in polish
     assert "500" in polish
     assert "label broker down" in polish
 
@@ -776,8 +786,8 @@ def test_allegro_label_api_wrapper_is_localized(app_env, monkeypatch):
     assert english == "Allegro label API 500: label broker down"
 
 
-def test_allegro_checkout_forms_wrapper_is_localized(app_env, monkeypatch):
-    """The endpoint identifier stays verbatim; only the surrounding prose is Polish."""
+def test_allegro_checkout_forms_wrapper_is_english_diagnostic(app_env, monkeypatch):
+    """Diagnostics stay English even when the request language is Polish."""
     import httpx
 
     allegro = _install_allegro_transport(
@@ -786,7 +796,7 @@ def test_allegro_checkout_forms_wrapper_is_localized(app_env, monkeypatch):
     allegro._token = "test-token"
 
     message = _allegro_error_message(allegro.fetch_orders(), "pl")
-    assert message.startswith("Błąd Allegro")
+    assert message.startswith("Allegro")
     assert "checkout-forms" in message  # technical identifier, never translated
     assert "502" in message
     assert "gateway" in message
@@ -801,7 +811,7 @@ def _proposal_response():
     }})
 
 
-def test_allegro_create_shipment_wrapper_is_localized(app_env, monkeypatch):
+def test_allegro_create_shipment_wrapper_is_english_diagnostic(app_env, monkeypatch):
     import httpx
 
     from models.order import Order
@@ -819,13 +829,13 @@ def test_allegro_create_shipment_wrapper_is_localized(app_env, monkeypatch):
     message = _allegro_error_message(
         allegro.create_shipment(Order(**sample_order()), {}, {}), "pl"
     )
-    assert message.startswith("Błąd Allegro")
-    assert "utworzenie przesyłki" in message
+    assert message.startswith("Allegro")
+    assert "create shipment" in message
     assert "500" in message
     assert "create failed" in message
 
 
-def test_allegro_shipment_status_wrapper_is_localized(app_env, monkeypatch):
+def test_allegro_shipment_status_wrapper_is_english_diagnostic(app_env, monkeypatch):
     import httpx
 
     from models.order import Order
@@ -848,7 +858,7 @@ def test_allegro_shipment_status_wrapper_is_localized(app_env, monkeypatch):
     message = _allegro_error_message(
         allegro.create_shipment(Order(**sample_order()), {}, {}), "pl"
     )
-    assert message.startswith("Błąd Allegro")
-    assert "status przesyłki" in message
+    assert message.startswith("Allegro")
+    assert "shipment status" in message
     assert "500" in message
     assert "poll broken" in message

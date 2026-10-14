@@ -10,7 +10,8 @@ const catalogSource = source.slice(
   source.indexOf('async function promptForAccessToken'),
 );
 const openPdfSource = source.slice(source.indexOf('async function openPdf('), source.indexOf('\nlet state ='));
-const functionSource = `${catalogSource}\n${openPdfSource}`;
+const errorSource = source.slice(source.indexOf('function apiErrorMessage('), source.indexOf('let toastTimer'));
+const functionSource = `${catalogSource}\n${errorSource}\n${openPdfSource}`;
 
 function setup(response, blocked = false, creationError = null) {
   const calls = [];
