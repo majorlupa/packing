@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Query
 from fastapi.responses import Response
 from jinja2 import Environment, FileSystemLoader
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 import store
 import api.allegro as allegro
@@ -32,6 +33,7 @@ _jinja = Environment(loader=FileSystemLoader(TEMPLATES_DIR), autoescape=True)
 
 CUSTOM_DOC_PATH: Path = store.DATA_DIR / "custom_doc.pdf"
 MAX_CUSTOM_DOC_BYTES = 20 * 1024 * 1024
+_CUSTOM_DOC_LOCK = threading.Lock()
 
 # One lock per (event loop, order): two "print label" requests for the same order must not
 # each create a shipment at Allegro (a shipment costs money and can only be created once).
@@ -175,11 +177,11 @@ async def print_label(
     Serialised per order so a double click cannot create two shipments.
     """
     async with _order_lock(order_id):
-        order = store.get_order(order_id)
+        order = await run_in_threadpool(store.get_order, order_id)
         if order is None:
             raise HTTPException(status_code=404, detail=t("error.order_not_found"))
 
-        settings = store.get_shipment_settings()
+        settings = await run_in_threadpool(store.get_shipment_settings)
         package = dict(settings["package"])
         for key, value in (("length", length), ("width", width), ("height", height), ("weight", weight)):
             if value is not None:
@@ -230,7 +232,7 @@ async def print_label(
                         if tracking_number:
                             stored["tracking_number"] = tracking_number
 
-                store.transact(remember_shipment)
+                await run_in_threadpool(store.transact, remember_shipment)
 
             label_bytes = await allegro.download_label(shipment_id, package.get("page_size", "A6"))
         except allegro.AllegroError as exc:
@@ -249,7 +251,7 @@ async def shipment_info(order_id: str):
     shipment exists but the number was never stored, fetch it once and persist
     it, so re-opening the packing card does not have to wait for Allegro again.
     """
-    order = store.get_order(order_id)
+    order = await run_in_threadpool(store.get_order, order_id)
     if order is None:
         raise HTTPException(status_code=404, detail=t("error.order_not_found"))
     tracking_number = order.tracking_number
@@ -264,12 +266,12 @@ async def shipment_info(order_id: str):
                 if stored is not None and not stored.get("tracking_number"):
                     stored["tracking_number"] = tracking_number
 
-            store.transact(remember_tracking)
+            await run_in_threadpool(store.transact, remember_tracking)
     return {"shipment_id": order.shipment_id, "tracking_number": tracking_number}
 
 
 @router.get("/orders/{order_id}/invoice")
-async def print_invoice(order_id: str):
+def print_invoice(order_id: str):
     """Return a sales document HTML — browser opens it and auto-prints."""
     html = _build_invoice_html(order_id)
     return Response(content=html, media_type="text/html")
@@ -343,6 +345,11 @@ async def upload_custom_doc(file: UploadFile = File(...)):
         raise HTTPException(status_code=413, detail=t("print.file_too_large"))
     if not payload.startswith(b"%PDF-"):
         raise HTTPException(status_code=400, detail=t("print.not_a_pdf"))
+    return await run_in_threadpool(_save_custom_doc, payload)
+
+
+def _save_custom_doc(payload: bytes):
+    """Validate and persist the upload without blocking the event loop."""
     from pypdf import PdfReader
     try:
         reader = PdfReader(io.BytesIO(payload))
@@ -352,13 +359,14 @@ async def upload_custom_doc(file: UploadFile = File(...)):
             _ = page.mediabox
     except Exception as exc:
         raise HTTPException(status_code=400, detail=t("print.not_a_pdf")) from exc
-    CUSTOM_DOC_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = CUSTOM_DOC_PATH.with_name(CUSTOM_DOC_PATH.name + ".tmp")
-    with open(tmp, "wb") as handle:
-        handle.write(payload)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(tmp, CUSTOM_DOC_PATH)
+    with _CUSTOM_DOC_LOCK:
+        CUSTOM_DOC_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = CUSTOM_DOC_PATH.with_name(CUSTOM_DOC_PATH.name + ".tmp")
+        with open(tmp, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, CUSTOM_DOC_PATH)
     return {"status": "uploaded"}
 
 

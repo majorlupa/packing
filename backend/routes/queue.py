@@ -34,7 +34,7 @@ def _detach_from_lists(state: dict, order_id: str) -> None:
 
 
 @router.patch("/picking-lists/{pl_id}")
-async def rename_picking_list(pl_id: str, req: RenamePickingListRequest):
+def rename_picking_list(pl_id: str, req: RenamePickingListRequest):
     """Rename a picking list. Only the name is needed — the orders are not touched."""
 
     def mutate(state):
@@ -48,7 +48,7 @@ async def rename_picking_list(pl_id: str, req: RenamePickingListRequest):
 
 
 @router.post("/picking-lists")
-async def create_picking_list(req: CreatePickingListRequest):
+def create_picking_list(req: CreatePickingListRequest):
     """Group selected pending orders into a picking list."""
     order_ids = list(dict.fromkeys(req.order_ids))
 
@@ -76,12 +76,12 @@ async def create_picking_list(req: CreatePickingListRequest):
 
 
 @router.get("/picking-lists")
-async def list_picking_lists():
+def list_picking_lists():
     return [pl.model_dump() for pl in store.get_picking_lists().values()]
 
 
 @router.post("/picking-lists/{pl_id}/revert")
-async def revert_to_pending(pl_id: str):
+def revert_to_pending(pl_id: str):
     def mutate(state):
         pl = state["picking_lists"].get(pl_id)
         if pl is None:
@@ -102,7 +102,7 @@ async def revert_to_pending(pl_id: str):
 
 
 @router.post("/picking-lists/{pl_id}/start-packing")
-async def start_packing(pl_id: str):
+def start_packing(pl_id: str):
     """Move the picking list's orders to packing status.
 
     A finished order stays in Gotowe: the packing view keeps the list for
@@ -139,17 +139,17 @@ def _set_status(order_id: str, status: OrderStatus, clear_list: bool = False):
 
 
 @router.post("/orders/{order_id}/done")
-async def mark_done(order_id: str):
+def mark_done(order_id: str):
     return _set_status(order_id, OrderStatus.done)
 
 
 @router.post("/orders/{order_id}/revert-pending")
-async def revert_to_pending_single(order_id: str):
+def revert_to_pending_single(order_id: str):
     return _set_status(order_id, OrderStatus.pending, clear_list=True)
 
 
 @router.post("/orders/{order_id}/undo-done")
-async def undo_done(order_id: str):
+def undo_done(order_id: str):
     return _set_status(order_id, OrderStatus.packing)
 
 
@@ -158,7 +158,7 @@ class ParcelSizeRequest(BaseModel):
 
 
 @router.patch("/orders/{order_id}/parcel-size")
-async def set_parcel_size(order_id: str, req: ParcelSizeRequest) -> dict[str, str]:
+def set_parcel_size(order_id: str, req: ParcelSizeRequest) -> dict[str, str]:
     """Persist a locker size locally; carrier integration is deferred."""
     def mutate(state: dict) -> dict[str, str]:
         data = state["orders"].get(order_id)

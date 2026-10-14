@@ -14,7 +14,10 @@ import os
 import asyncio
 import io
 import time
+import threading
+from functools import wraps
 import httpx
+from starlette.concurrency import run_in_threadpool
 from typing import List
 from models.order import Order, OrderItem
 import uuid
@@ -41,6 +44,16 @@ _refresh_token: str | None = None
 _expires_at: float = 0.0
 # Refresh must not run twice in parallel for one expiry.
 _token_lock = asyncio.Lock()
+_token_io_lock = threading.RLock()
+
+
+def _serialized_token_io(function):
+    """Keep token cache updates and the shared temporary file atomic in workers."""
+    @wraps(function)
+    def locked(*args, **kwargs):
+        with _token_io_lock:
+            return function(*args, **kwargs)
+    return locked
 
 
 class AllegroError(RuntimeError):
@@ -51,6 +64,7 @@ class AllegroNotAuthorized(AllegroError):
     """No usable access token — the operator has to authorize first."""
 
 
+@_serialized_token_io
 def _load_stored_token() -> None:
     """Pick up the persisted token once per process (or after a refresh)."""
     global _token, _refresh_token, _expires_at
@@ -78,6 +92,7 @@ def _load_stored_token() -> None:
     _expires_at = expires_at
 
 
+@_serialized_token_io
 def _store_token(payload: dict) -> None:
     global _token, _refresh_token, _expires_at
     _token = payload.get("access_token")
@@ -100,6 +115,7 @@ def _store_token(payload: dict) -> None:
     os.replace(tmp, TOKEN_FILE)
 
 
+@_serialized_token_io
 def _forget_token() -> None:
     global _token, _refresh_token, _expires_at
     _token = _refresh_token = None
@@ -124,7 +140,7 @@ async def _refresh_access_token() -> None:
             auth=(CLIENT_ID, CLIENT_SECRET),
         )
     if response.status_code in (400, 401):
-        _forget_token()
+        await run_in_threadpool(_forget_token)
         raise AllegroNotAuthorized(t("allegro.session_expired"))
     if not response.is_success:
         raise AllegroError(t(
@@ -133,12 +149,12 @@ async def _refresh_access_token() -> None:
             status=response.status_code,
             detail=response.text[:300],
         ))
-    _store_token(_json_object(response, "allegro.what.token_refresh"))
+    await run_in_threadpool(_store_token, _json_object(response, "allegro.what.token_refresh"))
 
 
 async def _access_token() -> str:
     """Return a valid access token, refreshing it when it is about to expire."""
-    _load_stored_token()
+    await run_in_threadpool(_load_stored_token)
     if _token and (_expires_at == 0.0 or time.time() < _expires_at - 60):
         return _token
     if not _refresh_token:
@@ -191,7 +207,7 @@ async def exchange_code(code: str):
                 status=r.status_code,
                 detail=r.text[:300],
             ))
-        _store_token(_json_object(r, "allegro.what.code_exchange"))
+        await run_in_threadpool(_store_token, _json_object(r, "allegro.what.code_exchange"))
 
 
 def _error_messages(errors: object) -> str:
@@ -361,7 +377,7 @@ async def download_label(shipment_id: str, page_size: str = "A6") -> bytes:
     """Download label PDF for a shipment management UUID."""
     if shipment_id.startswith(DRY_RUN_PREFIX):
         logger.warning("PACKING_SHIPMENT_DRY_RUN: zwracam atrapę etykiety dla %s", shipment_id)
-        return _dry_run_label(page_size)
+        return await run_in_threadpool(_dry_run_label, page_size)
     token = await _access_token()
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         r = await client.post(
