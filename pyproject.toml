@@ -1,0 +1,13 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# App imports follow environment initialization.
+"backend/main.py" = ["E402"]
+# Preserve existing unused imports without relaxing checks elsewhere.
+"backend/routes/print_routes.py" = ["F401"]
+"backend/tests/test_api.py" = ["F401"]

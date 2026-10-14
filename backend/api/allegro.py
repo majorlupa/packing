@@ -7,20 +7,26 @@ Tokens are kept in memory and persisted to the data volume (allegro_token.json,
 0600) so a container restart does not require re-authorizing. The access token is
 refreshed with the refresh token once it is close to expiry.
 """
+import asyncio
+import io
 import json
 import logging
 import math
 import os
-import asyncio
-import io
+import threading
 import time
-import httpx
-from typing import List
-from models.order import Order, OrderItem
 import uuid
+from functools import partial, wraps
 
+import httpx
 import store
-from localization import t
+from localization import t as translate
+from models.order import Order, OrderItem
+from starlette.concurrency import run_in_threadpool
+
+# API exceptions are internal diagnostics, not user-facing messages. Keep their
+# surrounding prose English while preserving upstream details verbatim.
+t = partial(translate, lang="en")
 
 logger = logging.getLogger("packing.allegro")
 
@@ -41,6 +47,16 @@ _refresh_token: str | None = None
 _expires_at: float = 0.0
 # Refresh must not run twice in parallel for one expiry.
 _token_lock = asyncio.Lock()
+_token_io_lock = threading.RLock()
+
+
+def _serialized_token_io(function):
+    """Keep token cache updates and the shared temporary file atomic in workers."""
+    @wraps(function)
+    def locked(*args, **kwargs):
+        with _token_io_lock:
+            return function(*args, **kwargs)
+    return locked
 
 
 class AllegroError(RuntimeError):
@@ -51,6 +67,7 @@ class AllegroNotAuthorized(AllegroError):
     """No usable access token — the operator has to authorize first."""
 
 
+@_serialized_token_io
 def _load_stored_token() -> None:
     """Pick up the persisted token once per process (or after a refresh)."""
     global _token, _refresh_token, _expires_at
@@ -78,6 +95,7 @@ def _load_stored_token() -> None:
     _expires_at = expires_at
 
 
+@_serialized_token_io
 def _store_token(payload: dict) -> None:
     global _token, _refresh_token, _expires_at
     _token = payload.get("access_token")
@@ -100,6 +118,7 @@ def _store_token(payload: dict) -> None:
     os.replace(tmp, TOKEN_FILE)
 
 
+@_serialized_token_io
 def _forget_token() -> None:
     global _token, _refresh_token, _expires_at
     _token = _refresh_token = None
@@ -124,7 +143,7 @@ async def _refresh_access_token() -> None:
             auth=(CLIENT_ID, CLIENT_SECRET),
         )
     if response.status_code in (400, 401):
-        _forget_token()
+        await run_in_threadpool(_forget_token)
         raise AllegroNotAuthorized(t("allegro.session_expired"))
     if not response.is_success:
         raise AllegroError(t(
@@ -133,12 +152,12 @@ async def _refresh_access_token() -> None:
             status=response.status_code,
             detail=response.text[:300],
         ))
-    _store_token(_json_object(response, "allegro.what.token_refresh"))
+    await run_in_threadpool(_store_token, _json_object(response, "allegro.what.token_refresh"))
 
 
 async def _access_token() -> str:
     """Return a valid access token, refreshing it when it is about to expire."""
-    _load_stored_token()
+    await run_in_threadpool(_load_stored_token)
     if _token and (_expires_at == 0.0 or time.time() < _expires_at - 60):
         return _token
     if not _refresh_token:
@@ -153,13 +172,18 @@ async def _access_token() -> str:
     return _token
 
 
-def to_http_exception(exc: AllegroError):
+def to_http_exception(exc: AllegroError | httpx.HTTPError, *, lang: str | None = None):
     """Map an Allegro failure onto the right HTTP status for the browser."""
     from fastapi import HTTPException
 
+    logger.warning("Allegro request failed (%s): %s", type(exc).__name__, exc)
     if isinstance(exc, AllegroNotAuthorized):
-        return HTTPException(status_code=401, detail=str(exc))
-    return HTTPException(status_code=502, detail=f"Allegro: {exc}")
+        status, code = 401, "allegro.not_authorized"
+    elif isinstance(exc, httpx.HTTPError):
+        status, code = 502, "common.allegro_unreachable"
+    else:
+        status, code = 502, "allegro.request_failed"
+    return HTTPException(status_code=status, detail={"code": code, "message": translate(code, lang=lang)})
 
 
 
@@ -191,7 +215,7 @@ async def exchange_code(code: str):
                 status=r.status_code,
                 detail=r.text[:300],
             ))
-        _store_token(_json_object(r, "allegro.what.code_exchange"))
+        await run_in_threadpool(_store_token, _json_object(r, "allegro.what.code_exchange"))
 
 
 def _error_messages(errors: object) -> str:
@@ -219,8 +243,7 @@ def _shipment_error(response: httpx.Response) -> str:
 def _json_object(response: httpx.Response, what: str) -> dict:
     """Parse an Allegro body; a gateway HTML page must become a 502, not a 500.
 
-    ``what`` is a message key naming the payload, so the error can be reported in
-    the request's language while the upstream body stays untranslated.
+    ``what`` names the payload in English for server-side diagnostics.
     """
     try:
         payload = response.json()
@@ -252,17 +275,17 @@ def _dry_run_label(page_size: str) -> bytes:
     width, height = {"A4": (595, 842), "A6": (298, 420)}.get(page_size.upper(), (298, 420))
     writer = PdfWriter()
     writer.add_blank_page(width=width, height=height)
-    writer.add_metadata({"/Title": t("label.dry_run_title"), "/Producer": "Weles"})
+    writer.add_metadata({"/Title": translate("label.dry_run_title"), "/Producer": "Weles"})
     out = io.BytesIO()
     writer.write(out)
     return out.getvalue()
 
 
-async def create_shipment(order, sender: dict, package: dict) -> str:
+async def create_shipment(order, sender: dict, package: dict, *, command_id: str | None = None) -> str:
     """Create a shipment via Allegro shipment management. Returns shipment UUID."""
     if dry_run_enabled():
-        logger.warning("PACKING_SHIPMENT_DRY_RUN=1: pomijam tworzenie przesyłki w Allegro (%s)", order.allegro_id)
-        return f"{DRY_RUN_PREFIX}{uuid.uuid4()}"
+        logger.warning("PACKING_SHIPMENT_DRY_RUN=1: skipping shipment creation in Allegro (%s)", order.allegro_id)
+        return f"{DRY_RUN_PREFIX}{command_id or uuid.uuid4()}"
     token = await _access_token()
 
     # The legacy sender argument is retained for callers/settings compatibility.
@@ -272,6 +295,15 @@ async def create_shipment(order, sender: dict, package: dict) -> str:
         "Accept": "application/vnd.allegro.public.v1+json",
     }
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        # A previous attempt may have reached Allegro before our connection died.
+        # Resolve its durable command before considering another submission.
+        if command_id:
+            previous = await client.get(
+                f"{API_URL}/shipment-management/shipments/create-commands/{command_id}",
+                headers=headers,
+            )
+            if previous.status_code != 404:
+                return await _poll_shipment(client, token, command_id, previous)
         proposal = await client.get(
             f"{API_URL}/shipment-management/delivery-proposals/{order.allegro_id}",
             headers=headers,
@@ -306,6 +338,8 @@ async def create_shipment(order, sender: dict, package: dict) -> str:
         # The browser prints PDFs. Page size belongs to the label-download request.
         shipment_input["labelFormat"] = "PDF"
         payload = {"input": shipment_input}
+        if command_id:
+            payload["commandId"] = command_id
         r = await client.post(
             f"{API_URL}/shipment-management/shipments/create-commands",
             headers={
@@ -322,12 +356,19 @@ async def create_shipment(order, sender: dict, package: dict) -> str:
                 status=r.status_code,
                 detail=_shipment_error(r),
             ))
-        command_id = _json_object(r, "allegro.what.shipment_create").get("commandId")
-        if not isinstance(command_id, str) or not command_id:
+        returned_id = _json_object(r, "allegro.what.shipment_create").get("commandId")
+        if not isinstance(returned_id, str) or not returned_id:
             raise AllegroError(t("allegro.no_command_id"))
+        if command_id and returned_id != command_id:
+            raise AllegroError(t("allegro.no_command_id"))
+        return await _poll_shipment(client, token, returned_id)
 
-        # Poll for result
-        for _ in range(15):
+
+async def _poll_shipment(client, token: str, command_id: str, initial=None) -> str:
+    """Resume a known command without creating another shipment."""
+    for attempt in range(15):
+        r = initial if attempt == 0 else None
+        if r is None:
             await asyncio.sleep(2)
             r = await client.get(
                 f"{API_URL}/shipment-management/shipments/create-commands/{command_id}",
@@ -336,23 +377,23 @@ async def create_shipment(order, sender: dict, package: dict) -> str:
                     "Accept": "application/vnd.allegro.public.v1+json",
                 },
             )
-            if not r.is_success:
-                raise AllegroError(t(
-                    "allegro.api_error",
-                    what=t("allegro.op.shipment_status"),
-                    status=r.status_code,
-                    detail=r.text[:300],
-                ))
-            data = _json_object(r, "allegro.what.shipment_status")
-            status = data.get("status")
-            if status == "SUCCESS":
-                shipment_id = data.get("shipmentId")
-                if not isinstance(shipment_id, str) or not shipment_id:
-                    raise AllegroError(t("allegro.no_shipment_id"))
-                return shipment_id
-            if status == "ERROR":
-                msg = _error_messages(data.get("errors")) or "unknown"
-                raise AllegroError(t("allegro.shipment_creation_failed", detail=msg))
+        if not r.is_success:
+            raise AllegroError(t(
+                "allegro.api_error",
+                what=t("allegro.op.shipment_status"),
+                status=r.status_code,
+                detail=r.text[:300],
+            ))
+        data = _json_object(r, "allegro.what.shipment_status")
+        status = data.get("status")
+        if status == "SUCCESS":
+            shipment_id = data.get("shipmentId")
+            if not isinstance(shipment_id, str) or not shipment_id:
+                raise AllegroError(t("allegro.no_shipment_id"))
+            return shipment_id
+        if status == "ERROR":
+            msg = _error_messages(data.get("errors")) or "unknown"
+            raise AllegroError(t("allegro.shipment_creation_failed", detail=msg))
 
     raise AllegroError(t("allegro.shipment_timeout"))
 
@@ -360,8 +401,8 @@ async def create_shipment(order, sender: dict, package: dict) -> str:
 async def download_label(shipment_id: str, page_size: str = "A6") -> bytes:
     """Download label PDF for a shipment management UUID."""
     if shipment_id.startswith(DRY_RUN_PREFIX):
-        logger.warning("PACKING_SHIPMENT_DRY_RUN: zwracam atrapę etykiety dla %s", shipment_id)
-        return _dry_run_label(page_size)
+        logger.warning("PACKING_SHIPMENT_DRY_RUN: returning a mock label for %s", shipment_id)
+        return await run_in_threadpool(_dry_run_label, page_size)
     token = await _access_token()
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         r = await client.post(
@@ -434,11 +475,11 @@ async def get_shipment_tracking(shipment_id: str) -> str | None:
             if r.is_success:
                 return _waybill_from_shipment(_json_object(r, "allegro.what.shipment_details"))
     except Exception as exc:
-        logger.warning("Nie udało się pobrać numeru nadania dla %s: %s", shipment_id, exc)
+        logger.warning("Failed to retrieve the tracking number for %s: %s", shipment_id, exc)
     return None
 
 
-def _generate_mock_orders() -> List[Order]:
+def _generate_mock_orders() -> list[Order]:
     """Generate realistic test orders for testing without a working Allegro sandbox."""
     return [
         Order(
@@ -503,13 +544,13 @@ def _generate_mock_orders() -> List[Order]:
 MAX_SYNC_PAGES = 10
 
 
-async def fetch_orders(limit: int = 100) -> List[Order]:
+async def fetch_orders(limit: int = 100) -> list[Order]:
     """Fetch recent READY_FOR_PROCESSING orders from Allegro, page by page."""
     if dry_run_enabled() and not is_authorized():
-        logger.info("Dry run bez autoryzacji: pobieranie przykładowych zamówień testowych.")
+        logger.info("Dry run without authorization: fetching mock orders.")
         return _generate_mock_orders()
     token = await _access_token()
-    orders: List[Order] = []
+    orders: list[Order] = []
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.allegro.public.v1+json"}
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         for page in range(MAX_SYNC_PAGES):
@@ -531,7 +572,7 @@ async def fetch_orders(limit: int = 100) -> List[Order]:
                     orders.append(_order_from_form(form))
                 except (AttributeError, KeyError, TypeError, ValueError) as exc:
                     # One malformed order must not fail the whole sync.
-                    logger.warning("pomijam zamówienie z Allegro: %s", exc)
+                    logger.warning("Skipping an Allegro order: %s", exc)
             if len(forms) < limit:
                 break
         else:

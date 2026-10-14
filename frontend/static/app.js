@@ -1,7 +1,31 @@
 const API = '/api';
-let accessToken = '';
+const ACCESS_TOKEN_STORAGE_KEY = 'weles.accessToken';
+let accessToken = readStoredAccessToken();
 let accessTokenPrompt = null;
 let appReady = false;
+
+function readStoredAccessToken() {
+  try {
+    return sessionStorage.getItem(ACCESS_TOKEN_STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function setAccessToken(token) {
+  accessToken = token;
+  try {
+    if (token) sessionStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, token);
+    else sessionStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
+  } catch {
+    // Authentication still works when browser storage is unavailable.
+  }
+}
+
+// No logout UI exists yet; use this helper to discard operator credentials.
+function clearAccessToken() {
+  setAccessToken('');
+}
 
 // ---- i18n catalog ----
 // Every app-owned string lives here. Keys are flat and grouped by area. A value
@@ -38,6 +62,10 @@ const MESSAGES = {
     'common.revertTitle': 'Cofnij do oczekujących',
     'common.copyId': 'Kopiuj ID',
     'common.errorPrefix': 'Błąd',
+    'common.requestFailed': 'Nie udało się wykonać żądania. Spróbuj ponownie.',
+    'allegro.not_authorized': 'Połącz ponownie Allegro, aby kontynuować.',
+    'common.allegro_unreachable': 'Nie można połączyć się z Allegro. Spróbuj ponownie później.',
+    'allegro.request_failed': 'Żądanie do Allegro nie powiodło się. Spróbuj ponownie.',
 
     'unit.order': { one: 'zamówienie', few: 'zamówienia', many: 'zamówień' },
     'unit.product': { one: 'produkt', few: 'produkty', many: 'produktów' },
@@ -145,6 +173,27 @@ const MESSAGES = {
     'doc.blockHeading': 'Nagłówek',
     'doc.blockType': 'Rodzaj bloku',
     'doc.blockText': 'Tekst',
+    'doc.blockPlaceholder': 'Pole dynamiczne',
+    'doc.blockLine': 'Linia',
+    'doc.bold': 'Pogrubienie',
+    'doc.templates': 'Szablony',
+    'doc.duplicate': 'Duplikuj',
+    'doc.export': 'Eksportuj bieżący',
+    'doc.exportAll': 'Eksportuj wszystkie',
+    'doc.import': 'Importuj JSON',
+    'doc.importConflict': 'Konflikt szablonów przy imporcie',
+    'doc.importRename': 'Zmień nazwę przy konflikcie',
+    'doc.importOverwrite': 'Nadpisz przy konflikcie',
+    'doc.importInvalid': 'Nieprawidłowy plik JSON.',
+    'doc.imported': 'Zaimportowano szablony: {count}',
+    'doc.deleteTemplate': 'Usuń szablon',
+    'doc.sample': 'Dane przykładowe',
+    'doc.canvas': 'Strona A4 — przeciągnij, zmień rozmiar; strzałki: 1 mm, Shift: 10 mm',
+    'doc.unknown': 'Nieznane pola',
+    'doc.resize': 'Zmień rozmiar',
+    'doc.confirmDelete': 'Usunąć ten szablon?',
+    'doc.discard': 'Odrzucić niezapisane zmiany?',
+    'doc.malformed': 'Nieprawidłowa składnia pola {{nazwa}}.',
     'doc.blockCustomer': 'Dane klienta',
     'doc.blockItems': 'Tabela produktów',
     'doc.blockLogo': 'Logo',
@@ -242,6 +291,10 @@ const MESSAGES = {
     'common.revertTitle': 'Return to pending',
     'common.copyId': 'Copy ID',
     'common.errorPrefix': 'Error',
+    'common.requestFailed': 'The request could not be completed. Please try again.',
+    'allegro.not_authorized': 'Reconnect Allegro to continue.',
+    'common.allegro_unreachable': 'Allegro cannot be reached. Please try again later.',
+    'allegro.request_failed': 'The Allegro request failed. Please try again.',
 
     'unit.order': { one: 'order', other: 'orders' },
     'unit.product': { one: 'product', other: 'products' },
@@ -348,6 +401,27 @@ const MESSAGES = {
     'doc.blockHeading': 'Heading',
     'doc.blockType': 'Block type',
     'doc.blockText': 'Text',
+    'doc.blockPlaceholder': 'Placeholder',
+    'doc.blockLine': 'Line',
+    'doc.bold': 'Bold',
+    'doc.templates': 'Templates',
+    'doc.duplicate': 'Duplicate',
+    'doc.export': 'Export current',
+    'doc.exportAll': 'Export all',
+    'doc.import': 'Import JSON',
+    'doc.importConflict': 'Import template conflicts',
+    'doc.importRename': 'Rename on conflict',
+    'doc.importOverwrite': 'Overwrite on conflict',
+    'doc.importInvalid': 'Invalid JSON file.',
+    'doc.imported': 'Templates imported: {count}',
+    'doc.deleteTemplate': 'Delete template',
+    'doc.sample': 'Sample data',
+    'doc.canvas': 'A4 page — drag, resize; arrows: 1 mm, Shift: 10 mm',
+    'doc.unknown': 'Unknown placeholders',
+    'doc.resize': 'Resize',
+    'doc.confirmDelete': 'Delete this template?',
+    'doc.discard': 'Discard unsaved changes?',
+    'doc.malformed': 'Invalid placeholder syntax; use {{name}}.',
     'doc.blockCustomer': 'Customer details',
     'doc.blockItems': 'Product table',
     'doc.blockLogo': 'Logo',
@@ -650,7 +724,7 @@ async function promptForAccessToken() {
     accessTokenPrompt = Promise.resolve().then(() => {
       const entered = window.prompt(t('token.prompt'));
       if (!entered || !entered.trim()) throw new Error(t('token.required'));
-      accessToken = entered.trim();
+      setAccessToken(entered.trim());
       return accessToken;
     }).finally(() => { accessTokenPrompt = null; });
   }
@@ -665,15 +739,19 @@ async function apiFetch(path, options = {}) {
     // backend which language to answer in.
     headers.set('Accept-Language', currentLanguage);
     if (token) headers.set('Authorization', `Bearer ${token}`);
-    return fetch(`${API}${path}`, { ...options, headers });
+    return fetch(`${API}${path}`, { ...options, headers }).catch(() => {
+      throw new Error(t('common.requestFailed'));
+    });
   };
 
-  let res = await send(accessToken);
+  const sentToken = accessToken;
+  let res = await send(sentToken);
+  if (res.status === 401 && accessToken === sentToken) clearAccessToken();
   if (res.status !== 401 || res.headers.get('X-Packing-Auth-Required') !== '1') return res;
 
   const token = await promptForAccessToken();
   res = await send(token);
-  if (res.status === 401 && res.headers.get('X-Packing-Auth-Required') === '1') accessToken = '';
+  if (res.status === 401 && accessToken === token) clearAccessToken();
   return res;
 }
 
@@ -683,6 +761,45 @@ function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, c => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
   ));
+}
+
+// Known app-owned codes follow the selected language. Older plain-text errors
+// remain supported; malformed bodies never turn into JSON or HTTP status text.
+function apiErrorMessage(payload) {
+  const detail = payload && (payload.detail ?? payload.message);
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    if (['allegro.not_authorized', 'common.allegro_unreachable', 'allegro.request_failed'].includes(detail.code)) {
+      return t(detail.code);
+    }
+    return typeof detail.message === 'string' && detail.message.trim()
+      ? detail.message : t('common.requestFailed');
+  }
+  return typeof detail === 'string' && detail.trim() ? detail : t('common.requestFailed');
+}
+
+async function responseError(res) {
+  let payload = null;
+  try { payload = await res.json(); } catch { /* HTML, empty or malformed response */ }
+  return new Error(apiErrorMessage(payload));
+}
+
+let toastTimer = null;
+function showToast(message, kind = 'info') {
+  const info = document.getElementById('toast-info');
+  const error = document.getElementById('toast-error');
+  if (!info || !error) return;
+  clearTimeout(toastTimer);
+  [info, error].forEach(node => {
+    clearStaticText(node);
+    node.textContent = '';
+  });
+  const node = kind === 'error' ? error : info;
+  bindStaticText(node, typeof message === 'function' ? message : () => String(message));
+  toastTimer = setTimeout(() => {
+    clearStaticText(node);
+    node.textContent = '';
+    toastTimer = null;
+  }, kind === 'error' ? 8000 : 5000);
 }
 
 // All API calls go through here: a failed request raises instead of silently
@@ -695,33 +812,29 @@ async function api(path, options = {}) {
     try { payload = await res.json(); } catch { payload = null; }
   }
   if (!res.ok) {
-    const detail = payload && (payload.detail || payload.message);
-    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail || `${res.status} ${res.statusText}`));
+    throw new Error(apiErrorMessage(payload));
   }
   return payload;
 }
 
 function reportError(prefix, err) {
-  alert(`${prefix}\n\n${err && err.message ? err.message : err}`);
+  showToast(`${prefix}\n${err && typeof err.message === 'string' ? err.message : t('common.requestFailed')}`, 'error');
 }
 
 // PDFs are fetched first so a failure (401/502/404) shows up as a message instead of
 // a browser tab full of JSON. `options` lets callers POST a draft (document preview)
-// through the same popup-timing and error handling.
-async function openPdf(path, options = {}) {
+// through the same popup-timing and error handling. beforeFetch can create a
+// label after reserving the popup, before downloading its PDF.
+async function openPdf(path, options = {}, beforeFetch = null) {
   // Reserve the tab during the click; browsers block popups after a slow API call.
   const printTab = window.open('about:blank', '_blank');
   if (!printTab) throw new Error(t('print.popupBlocked'));
   printTab.opener = null;
   try {
+    if (beforeFetch) await beforeFetch();
     const res = await apiFetch(path, options);
     if (!res.ok) {
-      let detail = `${res.status} ${res.statusText}`;
-      try {
-        const payload = await res.json();
-        if (payload && payload.detail) detail = payload.detail;
-      } catch { /* not JSON — keep the status line */ }
-      throw new Error(detail);
+      throw await responseError(res);
     }
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
@@ -1336,7 +1449,8 @@ function renderPackingCard(el) {
     labelBusy = true;
     btn.textContent = t('packing.generatingLabel');
     try {
-      await openPdf(`/print/orders/${order.id}/label?${params}`);
+      const labelPath = `/print/orders/${order.id}/label`;
+      await openPdf(labelPath, {}, () => api(`${labelPath}?${params}`, { method: 'POST' }));
       // Only claim the label is printed once the PDF actually came back.
       labelReady = true;
       labelBusy = false;
@@ -1664,10 +1778,8 @@ async function renderSettingsDocuments(panel) {
       setText(panel.querySelector('#btn-doc-pick'), 'settings.docReplace');
       attachDeleteHandler(panel);
     } else {
-      const err = await res.json();
-      // err.detail is upstream data — show it verbatim; only the generic
-      // fallback follows the language.
-      showNote(note, err.detail ? '✗ ' + err.detail : () => '✗ ' + t('settings.error'));
+      const err = await responseError(res);
+      showNote(note, '✗ ' + err.message);
     }
   });
 
@@ -1744,7 +1856,7 @@ document.getElementById('btn-zakoncz').addEventListener('click', async () => {
   if (!confirm(t('day.confirm'))) return;
   const doneOrders = state.orders.filter(o => o.status === 'done');
   if (!doneOrders.length) {
-    alert(t('day.noneReady'));
+    showToast(() => t('day.noneReady'));
     return;
   }
   const missing = doneOrders.filter(o => !o.shipment_id && !o.tracking_number);
@@ -1781,7 +1893,7 @@ document.getElementById('btn-auth').addEventListener('click', async () => {
     const data = await api('/orders/auth/url');
     window.location.href = data.url;
   } catch (e) {
-    alert(`${t('common.errorPrefix')}: ${e.message}`);
+    reportError(t('common.errorPrefix'), e);
   }
 });
 
@@ -1874,7 +1986,7 @@ async function boot() {
         form.classList.add('hidden');
         retry.classList.add('hidden');
         if (result.access_token) {
-          accessToken = result.access_token;
+          setAccessToken(result.access_token);
           document.getElementById('setup-access-token').value = result.access_token;
           document.getElementById('setup-success').classList.remove('hidden');
           setupMessage(() => t('setup.savedMsg'));

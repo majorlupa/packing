@@ -26,8 +26,12 @@ current_language: ContextVar[str] = ContextVar("packing_language", default=DEFAU
 MESSAGES: dict[str, dict[str, str]] = {
     # --- shared ---
     "common.allegro_unreachable": {
-        "pl": "Brak łączności z Allegro: {error}",
-        "en": "Cannot reach Allegro: {error}",
+        "pl": "Brak łączności z Allegro. Spróbuj ponownie.",
+        "en": "Cannot reach Allegro. Please try again.",
+    },
+    "allegro.request_failed": {
+        "pl": "Nie udało się wykonać operacji w Allegro. Spróbuj ponownie.",
+        "en": "The Allegro request failed. Please try again.",
     },
     "error.order_not_found": {
         "pl": "Nie znaleziono zamówienia.",
@@ -81,14 +85,51 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "Choose a parcel size (A, B or C) for the InPost parcel locker.",
     },
     # --- printing / documents ---
-    "document.invalid_template": {"pl": "Sprawdź nazwę szablonu, bloki i ich ustawienia (rozmiar tekstu 8–36).", "en": "Check the template name, blocks and their settings (text size 8–36)."},
-    "document.invalid_fields": {"pl": "Nieznane lub nieprawidłowe pole dynamiczne.", "en": "Unknown or malformed dynamic field."},
-    "document.invalid_logo": {"pl": "Logo musi być poprawnym obrazem PNG lub JPEG (maks. 2 MB).", "en": "Logo must be a valid PNG or JPEG image (max. 2 MB)."},
-    "document.logo_total": {"pl": "Łączny rozmiar logo w szablonie jest za duży (około 2 MB).", "en": "The combined logo size in this template is too large (about 2 MB)."},
-    "document.empty": {"pl": "Dodaj treść do szablonu przed jego użyciem.", "en": "Add content to the template before using it."},
-    "document.order_required": {"pl": "Wybierz zamówienie do spersonalizowanego dokumentu.", "en": "Choose an order for the personalized document."},
+    "document.import_format": {
+        "pl": "Nieprawidłowy format pliku szablonów.",
+        "en": "Invalid template file format.",
+    },
+    "document.import_version": {
+        "pl": "Nieobsługiwana wersja pliku szablonów.",
+        "en": "Unsupported template file version.",
+    },
+    "document.import_limit": {
+        "pl": "Import przekroczyłby limit 10 szablonów.",
+        "en": "Import would exceed the limit of 10 templates.",
+    },
+    "document.import_duplicate_names": {
+        "pl": "Nazwy szablonów w pliku nie mogą się powtarzać.",
+        "en": "Template names in the file must be unique.",
+    },
+    "document.invalid_template": {
+        "pl": "Sprawdź nazwę szablonu, bloki i ich ustawienia (rozmiar tekstu 8–36).",
+        "en": "Check the template name, blocks and their settings (text size 8–36).",
+    },
+    "document.invalid_fields": {
+        "pl": "Nieznane lub nieprawidłowe pole dynamiczne.",
+        "en": "Unknown or malformed dynamic field.",
+    },
+    "document.invalid_logo": {
+        "pl": "Logo musi być poprawnym obrazem PNG lub JPEG (maks. 2 MB).",
+        "en": "Logo must be a valid PNG or JPEG image (max. 2 MB).",
+    },
+    "document.logo_total": {
+        "pl": "Łączny rozmiar logo w szablonie jest za duży (około 2 MB).",
+        "en": "The combined logo size in this template is too large (about 2 MB).",
+    },
+    "document.empty": {
+        "pl": "Dodaj treść do szablonu przed jego użyciem.",
+        "en": "Add content to the template before using it.",
+    },
+    "document.order_required": {
+        "pl": "Wybierz zamówienie do spersonalizowanego dokumentu.",
+        "en": "Choose an order for the personalized document.",
+    },
     "document.template_id": {"pl": "Edytuj aktualnie wybrany szablon.", "en": "Edit the currently selected template."},
-    "document.render_failed": {"pl": "Nie udało się wygenerować dokumentu PDF.", "en": "Could not generate the PDF document."},
+    "document.render_failed": {
+        "pl": "Nie udało się wygenerować dokumentu PDF.",
+        "en": "Could not generate the PDF document.",
+    },
     "print.pdf_required": {
         "pl": "Wymagany plik PDF.",
         "en": "A PDF file is required.",

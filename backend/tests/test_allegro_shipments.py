@@ -5,7 +5,6 @@ from copy import deepcopy
 
 import httpx
 import pytest
-
 from conftest import sample_order
 
 
@@ -169,10 +168,17 @@ def test_label_route_runs_the_real_allegro_flow(app_env, client, monkeypatch):
         if request.url.path.endswith('/delivery-proposals/a-1'):
             return httpx.Response(200, json=proposal())
         if request.method == 'POST' and request.url.path.endswith('/create-commands'):
-            posted.update(json.loads(request.content)['input'])
-            return httpx.Response(201, json={'commandId': 'command-1'})
-        if request.url.path.endswith('/create-commands/command-1'):
+            body = json.loads(request.content)
+            posted.update(body['input'])
+            posted['command_id'] = body['commandId']
+            return httpx.Response(201, json={'commandId': body['commandId']})
+        if '/create-commands/' in request.url.path:
+            if 'command_id' not in posted:
+                return httpx.Response(404)
+            assert request.url.path.endswith('/' + posted['command_id'])
             return httpx.Response(200, json={'status': 'SUCCESS', 'shipmentId': 'shipment-1'})
+        if request.url.path.endswith('/shipments/shipment-1'):
+            return httpx.Response(200, json={'packages': [{'waybill': 'TRACK-1'}]})
         if request.url.path.endswith('/shipment-management/label'):
             posted['label'] = json.loads(request.content)
             return httpx.Response(200, content=b'%PDF-1.7 label')
@@ -191,7 +197,11 @@ def test_label_route_runs_the_real_allegro_flow(app_env, client, monkeypatch):
 
     monkeypatch.setattr(allegro.httpx, 'AsyncClient', client_factory)
 
-    response = client.get('/api/print/orders/o-1/label?length=40&width=30&height=20&weight=2.5')
+    created = client.post('/api/print/orders/o-1/label?length=40&width=30&height=20&weight=2.5')
+    assert created.status_code == 200
+    assert created.json() == {'shipment_id': 'shipment-1', 'tracking_number': 'TRACK-1'}
+    assert 'label' not in posted
+    response = client.get('/api/print/orders/o-1/label')
     assert response.status_code == 200
     assert response.headers['content-type'] == 'application/pdf'
     assert response.content.startswith(b'%PDF-')
@@ -222,6 +232,9 @@ def test_dry_run_label_route_works_without_allegro_authorization(app_env, client
     monkeypatch.setenv('PACKING_SHIPMENT_DRY_RUN', '1')
     app_env.write_state(app_env.default_state({'o-1': sample_order('o-1', 'a-1')}))
 
+    created = client.post('/api/print/orders/o-1/label')
+    assert created.status_code == 200
+    assert created.json()['shipment_id'].startswith('dry-run-')
     response = client.get('/api/print/orders/o-1/label')
     assert response.status_code == 200
     assert response.content.startswith(b'%PDF-')
@@ -284,15 +297,15 @@ def test_sync_does_not_hide_upstream_failure_behind_mock_orders(app_env, client,
     monkeypatch.setattr(allegro, 'fetch_orders', failing)
     response = client.post('/api/orders/sync')
     assert response.status_code == 502
-    assert '503' in response.json()['detail']
+    assert response.json()['detail']['code'] == 'allegro.request_failed'
+    assert '503' not in response.text
     assert client.get('/api/orders/').json() == []
 
 
 def test_sync_reports_network_failure_in_dry_run(app_env, client, monkeypatch):
     """A dropped connection is not an authorization gap; it stays a 502."""
-    import httpx
-
     import api.allegro as allegro
+    import httpx
     monkeypatch.setenv('PACKING_SHIPMENT_DRY_RUN', '1')
     allegro._token, allegro._refresh_token, allegro._expires_at = 'tok', 'ref', 0.0
 
@@ -346,7 +359,7 @@ def test_new_shipment_id_is_saved_even_when_tracking_is_unavailable(app_env, cli
     app_env.write_state(app_env.default_state({'o-1': sample_order('o-1', 'a-1')}))
     created = []
 
-    async def create(_order, _sender, _package):
+    async def create(_order, _sender, _package, *, command_id=None):
         created.append('created')
         return 'shipment-1'
 
@@ -360,7 +373,9 @@ def test_new_shipment_id_is_saved_even_when_tracking_is_unavailable(app_env, cli
     monkeypatch.setattr(allegro, 'get_shipment_tracking', no_tracking)
     monkeypatch.setattr(allegro, 'download_label', label)
 
-    assert client.get('/api/print/orders/o-1/label').status_code == 200
+    response = client.post('/api/print/orders/o-1/label')
+    assert response.status_code == 200
+    assert response.json() == {'shipment_id': 'shipment-1', 'tracking_number': None}
     state = json.loads(app_env.state_file.read_text(encoding='utf-8'))
     assert state['orders']['o-1']['shipment_id'] == 'shipment-1'
     assert state['orders']['o-1']['tracking_number'] is None
@@ -370,8 +385,8 @@ def test_new_shipment_id_is_saved_even_when_tracking_is_unavailable(app_env, cli
     assert created == ['created']
 
 
-def test_reprint_stores_a_waybill_that_was_missing_at_creation(app_env, client, monkeypatch):
-    """An order shipped before the number existed recovers it on the next print."""
+def test_reprint_does_not_store_a_waybill_that_was_missing_at_creation(app_env, client, monkeypatch):
+    """Download is read-only; tracking recovery belongs to shipment info."""
     import api.allegro as allegro
     app_env.write_state(app_env.default_state({'o-1': sample_order(
         'o-1', 'a-1', shipment_id='shipment-existing', tracking_number=None)}))
@@ -387,7 +402,7 @@ def test_reprint_stores_a_waybill_that_was_missing_at_creation(app_env, client, 
 
     assert client.get('/api/print/orders/o-1/label').status_code == 200
     state = json.loads(app_env.state_file.read_text(encoding='utf-8'))
-    assert state['orders']['o-1']['tracking_number'] == 'WWWW123PL'
+    assert state['orders']['o-1']['tracking_number'] is None
     # The existing shipment id must survive untouched.
     assert state['orders']['o-1']['shipment_id'] == 'shipment-existing'
     assert client.get('/api/print/orders/o-1/shipment').json()['tracking_number'] == 'WWWW123PL'

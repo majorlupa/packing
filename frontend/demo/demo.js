@@ -18,8 +18,8 @@
   }));
   let orders, lists, archive, shipment, invoice, documents, counter, syncCounter;
   let tourActive = false;
-  const json = (body, status = 200) => new Response(JSON.stringify(body), {
-    status, headers: { 'Content-Type': 'application/json' },
+  const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), {
+    status, headers: { 'Content-Type': 'application/json', ...headers },
   });
   function reset() {
     orders = initialOrders(); lists = []; archive = []; counter = 0; syncCounter = 0;
@@ -28,7 +28,7 @@
     documents = {version:1,templates:[{id:'default',name:'Mój dokument',blocks:[]}],
       profiles:{default:{source:'upload',active_template_id:'default'}}};
     const draft = global.DocumentEditor?.draft;
-    if (draft) Object.assign(draft, {source:'upload',name:documents.templates[0].name,blocks:[],
+    if (draft) Object.assign(draft, {templateId:'default',source:'upload',name:documents.templates[0].name,blocks:[],
       status:'idle',error:'',errorKey:null,revision:draft.revision + 1});
   }
   reset();
@@ -52,11 +52,14 @@
     const fields = {buyer_name:order.buyer_name,buyer_address:order.buyer_address,
       order_number:order.allegro_id,date:new Date().toLocaleDateString('pl-PL'),
       courier:order.courier,pickup_point:order.pickup_point || '-',tracking_number:order.tracking_number || '-'};
+    Object.assign(fields, {'buyer.name':order.buyer_name,'buyer.address':order.buyer_address,
+      'order.id':order.id,'order.date':fields.date,items:order.items.map(item => `${item.name} x ${item.quantity}`).join('\n')});
     return ['SIMPLIFIED DEMO - TEXT ONLY; NO LOGOS OR FORMATTING', ...template.blocks.flatMap(block => {
       if (block.type === 'customer') return [order.buyer_name, order.buyer_address];
       if (block.type === 'items') return order.items.map(item => `${item.quantity} x ${item.name}${block.show_prices ? ` - ${item.unit_price} PLN` : ''}`);
-      if (block.type === 'logo') return ['[LOGO - available in the full application]'];
-      return String(block.text || '').replace(/\{\{([^{}]+)\}\}/g, (_, key) => fields[key] ?? '-').split('\n');
+      if (block.type === 'logo') return block.image ? ['[LOGO - available in the full application]'] : [];
+      if (block.type === 'line') return ['--------------------'];
+      return String(block.text || '').replace(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_.]*)\s*\}\}/g, (_, key) => fields[key] || '-').split('\n');
     })];
   }
   function samplePdf(order, label, extra = [], customOnly = false) {
@@ -75,39 +78,131 @@
     objects.forEach((object, i) => { offsets.push(pdf.length); pdf += `${i + 1} 0 obj\n${object}\nendobj\n`; });
     const xref = pdf.length;
     pdf += `xref\n0 6\n0000000000 65535 f \n${offsets.slice(1).map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
-    return new Response(pdf, { headers: { 'Content-Type': 'application/pdf' } });
+    return new Response(pdf, { headers: { 'Content-Type': 'application/pdf', 'Cache-Control':'no-store' } });
+  }
+  const hasContent = template => template.blocks.some(block =>
+    ['customer','items','line'].includes(block.type) || (block.type === 'logo' ? block.image : String(block.text || '').trim()));
+  function validTemplate(template) {
+    return template && /^[a-zA-Z0-9_-]{1,64}$/.test(template.id)
+      && typeof template.name === 'string' && template.name.length > 0 && template.name.length <= 100
+      && Array.isArray(template.blocks) && template.blocks.length <= 50 && template.blocks.every(block =>
+        block && ['heading','text','placeholder','customer','items','logo','line'].includes(block.type)
+        && typeof (block.text ?? '') === 'string' && (block.text || '').length <= 4000
+        && !/\{\{|\}\}|\{%|%\}|\{#|#\}/.test((block.text || '').replace(/\{\{\s*[a-zA-Z_][a-zA-Z0-9_.]*\s*\}\}/g, '')));
   }
   async function request(path, options = {}) {
-    const method = options.method || 'GET';
+    const method = (options.method || 'GET').toUpperCase();
     const route = path.split('?')[0];
-    const body = typeof options.body === 'string' ? JSON.parse(options.body) : {};
+    let body;
+    try { body = typeof options.body === 'string' ? JSON.parse(options.body) : {}; }
+    catch { return json({detail:'Nieprawidłowy JSON.'}, 422); }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return json({detail:'Nieprawidłowe dane.'}, 422);
     let response;
     if (route === '/orders/' && method === 'GET') return json(orders);
     if (route === '/orders/status') return json({ ok: true, quarantined: 0 });
     if (route === '/orders/auth/status') return json({ authorized: true });
     if (route === '/orders/archive') return json(archive);
+    // Match file operations before the template-id routes (export/import are not IDs).
+    if (route === '/print/document-templates/export' && method === 'GET') {
+      const id = new URLSearchParams(path.split('?')[1] || '').get('template_id');
+      const templates = id === null ? documents.templates : documents.templates.filter(entry => entry.id === id);
+      if (!templates.length) return json({detail:'Template not found'}, 404);
+      const filename = id === null ? 'packing-templates.json' : `packing-template-${id}.json`;
+      return json({format:'packing.document-templates',version:1,exported_at:new Date().toISOString(),
+        templates:templates.map(({id,name,blocks}) => ({id,name,blocks}))}, 200,
+      {'Content-Disposition':`attachment; filename="${filename}"`,'Cache-Control':'no-store'});
+    }
+    if (route === '/print/document-templates/import' && method === 'POST') {
+      const data = body.data;
+      if (!['rename','overwrite'].includes(body.on_conflict)
+        || Object.keys(body).some(key => !['data','on_conflict'].includes(key))
+        || !data || typeof data !== 'object' || Array.isArray(data)
+        || Object.keys(data).some(key => !['format','version','exported_at','templates'].includes(key))
+        || data.format !== 'packing.document-templates' || data.version !== 1
+        || typeof data.exported_at !== 'string' || !Number.isFinite(Date.parse(data.exported_at))
+        || !Array.isArray(data.templates) || !data.templates.length || data.templates.length > 10
+        || !data.templates.every(template => validTemplate(template) && template.name.trim())) {
+        return json({detail:'Nieprawidłowy plik szablonów.'}, 422);
+      }
+      const incoming = data.templates.map(template => ({...template,name:template.name.trim()}));
+      if (new Set(incoming.map(template => template.name)).size !== incoming.length) {
+        return json({detail:'Duplicate template names'}, 422);
+      }
+      // Stage the entire import so a failed limit check cannot partially change state.
+      const settings = JSON.parse(JSON.stringify(documents));
+      const imported = [];
+      let nextCounter = counter;
+      for (const template of incoming) {
+        const item = {...template};
+        const index = settings.templates.findIndex(entry => entry.name.trim() === template.name);
+        if (index !== -1 && body.on_conflict === 'overwrite') {
+          item.id = settings.templates[index].id;
+          settings.templates[index] = item;
+        } else {
+          const names = new Set(settings.templates.map(entry => entry.name.trim()));
+          let number = 2;
+          while (names.has(item.name)) {
+            const suffix = ` (${number++})`;
+            item.name = template.name.slice(0,100 - suffix.length) + suffix;
+          }
+          do { item.id = `template-${++nextCounter}`; }
+          while (settings.templates.some(entry => entry.id === item.id) || incoming.some(entry => entry.id === item.id));
+          settings.templates.push(item);
+        }
+        imported.push(item.id);
+      }
+      if (settings.templates.length > 10) return json({detail:'Maximum 10 templates'}, 422);
+      documents = settings; counter = nextCounter;
+      return json({settings:documents,imported});
+    }
+    const collection = route.match(/^\/print\/document-templates\/([^/]+)(?:\/(duplicate|select))?$/);
+    if (collection) {
+      const id = decodeURIComponent(collection[1]);
+      const template = documents.templates.find(entry => entry.id === id);
+      if (!template) return json({detail:'Template not found'}, 404);
+      const profile = documents.profiles.default;
+      if (method === 'POST' && collection[2] === 'duplicate') {
+        if (documents.templates.length >= 10) return json({detail:'Maximum 10 templates'}, 422);
+        if (body.name !== undefined && (typeof body.name !== 'string' || !body.name.length || body.name.length > 100)) return json({detail:'Nieprawidłowa nazwa.'}, 422);
+        const copy = JSON.parse(JSON.stringify(template));
+        copy.id = `template-${++counter}`;
+        copy.name = body.name || `${template.name.slice(0,95)} copy`;
+        documents.templates.push(copy); profile.active_template_id = copy.id;
+      } else if (method === 'POST' && collection[2] === 'select') profile.active_template_id = id;
+      else if (method === 'DELETE' && !collection[2]) {
+        if (documents.templates.length === 1) return json({detail:'Cannot delete the last template'}, 422);
+        documents.templates = documents.templates.filter(entry => entry.id !== id);
+        if (profile.active_template_id === id) profile.active_template_id = documents.templates[0].id;
+      } else return json({detail:'Nieobsługiwana operacja demo.'}, 405);
+      return json(documents);
+    }
     if (route === '/print/document-settings') {
       if (method === 'POST') {
-        if (!['upload','template'].includes(body.source) || body.template?.id !== 'default' || !Array.isArray(body.template.blocks) || body.template.blocks.length > 50) {
+        if (!['upload','template'].includes(body.source) || !validTemplate(body.template)
+          || !documents.templates.some(entry => entry.id === body.template.id)
+          || (body.source === 'template' && !hasContent(body.template))) {
           return json({detail:'Nieprawidłowy szablon demo.'}, 422);
         }
-        documents.templates[0] = body.template;
+        documents.templates[documents.templates.findIndex(entry => entry.id === body.template.id)] = body.template;
         documents.profiles.default.source = body.source;
+        documents.profiles.default.active_template_id = body.template.id;
       }
       return json(documents);
     }
-    const customAvailable = documents.profiles.default.source === 'template' && documents.templates[0].blocks.some(block =>
-      ['customer','items'].includes(block.type) || (block.type === 'logo' ? block.image : String(block.text || '').trim()));
+    const activeTemplate = documents.templates.find(entry => entry.id === documents.profiles.default.active_template_id);
+    const customAvailable = documents.profiles.default.source === 'template' && hasContent(activeTemplate);
     if (route === '/print/custom-doc/info') return json({available:Boolean(customAvailable),source:documents.profiles.default.source,upload_available:false,size:0});
     if (route === '/print/document-preview' && method === 'POST' || route === '/print/custom-doc' && method === 'GET') {
       const orderId = route === '/print/document-preview' ? body.order_id : new URLSearchParams(path.split('?')[1] || '').get('order_id');
+      if (!orderId) return json({detail:'Wybierz zamówienie.'}, 422);
       const order = orders.find(entry => entry.id === orderId);
       if (!order) return json({detail:'Nie znaleziono zamówienia.'}, 404);
       if (route === '/print/custom-doc' && !customAvailable) return json({detail:'Wybierz i zapisz szablon dokumentu.'}, 404);
-      const template = route === '/print/document-preview' ? body.template : documents.templates[0];
-      if (!Array.isArray(template?.blocks) || !template.blocks.length) return json({detail:'Szablon jest pusty.'}, 422);
+      const template = route === '/print/document-preview' ? body.template : activeTemplate;
+      if (!validTemplate(template) || !hasContent(template)) return json({detail:'Nieprawidłowy lub pusty szablon.'}, 422);
       return samplePdf(order, false, templateLines(order, template), true);
     }
+    if (route === '/print/custom-doc' && method === 'DELETE') return json({status:'deleted'});
     if (route === '/print/custom-doc' || route === '/print/custom-doc/upload') {
       return json({ detail: 'W demo pliki nie są przesyłane. Wypróbuj przykładowy dokument w widoku Pakowanie.' }, 400);
     }
@@ -175,15 +270,26 @@
       const order = orders.find(entry => entry.id === id);
       if (!order) return json({ detail: 'Nie znaleziono zamówienia.' }, 404);
       if (type === 'label') {
-        if (order.delivery_type === 'inpost_locker') {
-          const size = new URLSearchParams(path.split('?')[1] || '').get('parcel_size') || order.parcel_size;
-          if (!['A', 'B', 'C'].includes(size)) return json({ detail: 'Wybierz gabaryt A, B lub C.' }, 400);
-          setParcelSize(id, size);
+        if (method === 'GET') {
+          return order.shipment_id ? samplePdf(order, true) : json({detail:'Shipment has not been created.'}, 409);
         }
-        order.shipment_id = `sample-${id}`;
-        order.tracking_number = `DEMO-TRACK-${id}`;
+        if (method !== 'POST') return json({detail:'Nieobsługiwana operacja demo.'}, 405);
+        const params = new URLSearchParams(path.split('?')[1] || '');
+        for (const key of ['length','width','height','weight']) {
+          if (params.has(key) && (!(Number(params.get(key)) > 0) || Number(params.get(key)) > (key === 'weight' ? 100 : 500))) {
+            return json({detail:'Nieprawidłowe wymiary lub waga.'}, 422);
+          }
+        }
+        if (!order.shipment_id && order.delivery_type === 'inpost_locker' && !['A','B','C'].includes(order.parcel_size)) return json({detail:'Wybierz gabaryt A, B lub C.'}, 400);
+        if (!order.shipment_id) {
+          order.shipment_id = `sample-${id}`;
+          order.tracking_number = `DEMO-TRACK-${id}`;
+        }
+        response = json({shipment_id:order.shipment_id,tracking_number:order.tracking_number});
+      } else {
+        if (method !== 'GET') return json({detail:'Nieobsługiwana operacja demo.'}, 405);
+        response = samplePdf(order, false, type === 'combined' && customAvailable ? templateLines(order, activeTemplate) : []);
       }
-      response = samplePdf(order, type === 'label', type === 'combined' && customAvailable ? templateLines(order, documents.templates[0]) : []);
     } else return json({ detail: 'Ta funkcja wymaga pełnej wersji Weles. Demo działa wyłącznie na przykładowych danych.' }, 400);
     updateGuide();
     return response;

@@ -4,7 +4,7 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 const out = path.join(root, 'dist');
 fs.mkdirSync(path.join(out, 'static'), { recursive: true });
-for (const file of ['app.js', 'style.css', 'document-editor.js']) {
+for (const file of ['app.js', 'style.css', 'document-editor.js', 'document-editor.css']) {
   fs.copyFileSync(path.join(root, 'frontend/static', file), path.join(out, 'static', file));
 }
 for (const file of ['demo.js', 'demo.css']) {

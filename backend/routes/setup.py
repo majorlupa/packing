@@ -5,13 +5,12 @@ import os
 import secrets
 import threading
 
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, SecretStr, field_validator
-
 import api.allegro as allegro
 import configuration
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 from localization import t
+from pydantic import BaseModel, ConfigDict, SecretStr, field_validator
 
 router = APIRouter(prefix="/setup", tags=["setup"])
 logger = logging.getLogger("packing.setup")

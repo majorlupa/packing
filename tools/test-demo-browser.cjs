@@ -31,6 +31,15 @@ const server = http.createServer((req, res) => {
     await page.locator('.demo-welcome[open]').waitFor();
     await page.screenshot({ path: evidence('weles-demo-welcome.png') });
     await page.locator('#demo-skip').click();
+    assert.equal(await page.locator('#btn-auth').isVisible(), false);
+    assert.equal(await page.locator('#setup').isVisible(), false);
+    await page.evaluate(async () => {
+      try { await api('/picking-lists', {method:'POST',body:'{"order_ids":["missing"]}'}); }
+      catch (error) { reportError('Mock failure', error); }
+      await checkAuthStatus();
+    });
+    assert.match(await page.locator('#toast-error').innerText(), /Mock failure\nWybierz oczekujące zamówienia/);
+    assert.equal(await page.locator('#btn-auth').isVisible(), false);
     assert.equal(await page.locator('#count-pending').innerText(), '5');
     assert.equal(await page.locator('#demo-guide').isVisible(), false);
     await page.reload();
@@ -49,12 +58,16 @@ const server = http.createServer((req, res) => {
     const previewPopup = await previewReady;
     await previewPopup.close();
     const previewText = await page.evaluate(async () => (await WelesDemo.request('/print/document-preview', {
-      method:'POST',body:JSON.stringify({order_id:'demo-102',template:{blocks:DocumentEditor.draft.blocks}})
+      method:'POST',body:JSON.stringify({order_id:'demo-102',template:{id:DocumentEditor.draft.templateId,name:DocumentEditor.draft.name,blocks:DocumentEditor.draft.blocks}})
     })).text());
     assert.match(previewText, /Hello Marek Demo - DEMO-102/);
     assert.doesNotMatch(previewText, /SAMPLE ORDER DOCUMENT|Kubek ceramiczny/);
     await page.locator('.editor-save').click();
     await page.waitForFunction(() => DocumentEditor.draft.status === 'saved');
+    await page.locator('.editor-template-duplicate').click();
+    await page.waitForFunction(() => DocumentEditor.draft.templateId !== 'default');
+    await page.locator('.editor-template-delete').click();
+    await page.waitForFunction(() => DocumentEditor.draft.templateId === 'default');
     assert.equal(await page.evaluate(async () => (await (await WelesDemo.request('/print/custom-doc/info')).json()).available), true);
     await page.locator('[data-queue="pending"]').click();
     await page.locator('#demo-tour').click();
