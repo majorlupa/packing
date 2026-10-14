@@ -3,9 +3,7 @@ target-version = "py311"
 line-length = 120
 
 [tool.ruff.lint]
-select = ["E", "F", "W"]
-# Existing templates and translations contain long literal strings.
-ignore = ["E501"]
+select = ["E", "F", "W", "I", "UP", "B"]
 
 [tool.ruff.lint.per-file-ignores]
 # App imports follow environment initialization.

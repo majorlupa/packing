@@ -11,7 +11,6 @@ import time
 
 import httpx
 import pytest
-
 from conftest import sample_order
 
 # ---------------------------------------------------------------- wiring
@@ -714,6 +713,7 @@ def test_custom_doc_upload_rejects_non_pdf(client):
 
 def test_custom_doc_upload_and_delete(app_env, client):
     import io
+
     from pypdf import PdfWriter
     writer = PdfWriter()
     writer.add_blank_page(width=200, height=300)

@@ -2,7 +2,6 @@
 import importlib
 
 import pytest
-
 from conftest import sample_order
 
 

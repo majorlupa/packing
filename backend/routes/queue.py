@@ -1,17 +1,18 @@
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
-from typing import List, Literal
 import uuid
+from typing import Literal
+
 import store
+from fastapi import APIRouter, HTTPException
 from localization import t
 from models.order import Order, OrderStatus, PickingList
+from pydantic import BaseModel, Field
 
 router = APIRouter(tags=["queue"])
 
 
 class CreatePickingListRequest(BaseModel):
     name: str = ""
-    order_ids: List[str] = Field(min_length=1)
+    order_ids: list[str] = Field(min_length=1)
 
 
 class RenamePickingListRequest(BaseModel):

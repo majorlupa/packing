@@ -2,13 +2,12 @@
 import logging
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import Response
-from pydantic import BaseModel, ConfigDict, Field
-
 import store
 from documents import DocumentSettings, DocumentTemplate, render_document_pdf
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 from localization import t
+from pydantic import BaseModel, ConfigDict, Field
 
 router = APIRouter(prefix="/print", tags=["documents"])
 logger = logging.getLogger("packing.documents")

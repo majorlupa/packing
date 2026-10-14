@@ -7,23 +7,22 @@ Tokens are kept in memory and persisted to the data volume (allegro_token.json,
 0600) so a container restart does not require re-authorizing. The access token is
 refreshed with the refresh token once it is close to expiry.
 """
+import asyncio
+import io
 import json
 import logging
 import math
 import os
-import asyncio
-import io
-import time
 import threading
-from functools import partial, wraps
-import httpx
-from starlette.concurrency import run_in_threadpool
-from typing import List
-from models.order import Order, OrderItem
+import time
 import uuid
+from functools import partial, wraps
 
+import httpx
 import store
 from localization import t as translate
+from models.order import Order, OrderItem
+from starlette.concurrency import run_in_threadpool
 
 # API exceptions are internal diagnostics, not user-facing messages. Keep their
 # surrounding prose English while preserving upstream details verbatim.
@@ -285,7 +284,7 @@ def _dry_run_label(page_size: str) -> bytes:
 async def create_shipment(order, sender: dict, package: dict, *, command_id: str | None = None) -> str:
     """Create a shipment via Allegro shipment management. Returns shipment UUID."""
     if dry_run_enabled():
-        logger.warning("PACKING_SHIPMENT_DRY_RUN=1: pomijam tworzenie przesyłki w Allegro (%s)", order.allegro_id)
+        logger.warning("PACKING_SHIPMENT_DRY_RUN=1: skipping shipment creation in Allegro (%s)", order.allegro_id)
         return f"{DRY_RUN_PREFIX}{command_id or uuid.uuid4()}"
     token = await _access_token()
 
@@ -402,7 +401,7 @@ async def _poll_shipment(client, token: str, command_id: str, initial=None) -> s
 async def download_label(shipment_id: str, page_size: str = "A6") -> bytes:
     """Download label PDF for a shipment management UUID."""
     if shipment_id.startswith(DRY_RUN_PREFIX):
-        logger.warning("PACKING_SHIPMENT_DRY_RUN: zwracam atrapę etykiety dla %s", shipment_id)
+        logger.warning("PACKING_SHIPMENT_DRY_RUN: returning a mock label for %s", shipment_id)
         return await run_in_threadpool(_dry_run_label, page_size)
     token = await _access_token()
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
@@ -476,11 +475,11 @@ async def get_shipment_tracking(shipment_id: str) -> str | None:
             if r.is_success:
                 return _waybill_from_shipment(_json_object(r, "allegro.what.shipment_details"))
     except Exception as exc:
-        logger.warning("Nie udało się pobrać numeru nadania dla %s: %s", shipment_id, exc)
+        logger.warning("Failed to retrieve the tracking number for %s: %s", shipment_id, exc)
     return None
 
 
-def _generate_mock_orders() -> List[Order]:
+def _generate_mock_orders() -> list[Order]:
     """Generate realistic test orders for testing without a working Allegro sandbox."""
     return [
         Order(
@@ -545,13 +544,13 @@ def _generate_mock_orders() -> List[Order]:
 MAX_SYNC_PAGES = 10
 
 
-async def fetch_orders(limit: int = 100) -> List[Order]:
+async def fetch_orders(limit: int = 100) -> list[Order]:
     """Fetch recent READY_FOR_PROCESSING orders from Allegro, page by page."""
     if dry_run_enabled() and not is_authorized():
-        logger.info("Dry run bez autoryzacji: pobieranie przykładowych zamówień testowych.")
+        logger.info("Dry run without authorization: fetching mock orders.")
         return _generate_mock_orders()
     token = await _access_token()
-    orders: List[Order] = []
+    orders: list[Order] = []
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.allegro.public.v1+json"}
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         for page in range(MAX_SYNC_PAGES):
@@ -573,7 +572,7 @@ async def fetch_orders(limit: int = 100) -> List[Order]:
                     orders.append(_order_from_form(form))
                 except (AttributeError, KeyError, TypeError, ValueError) as exc:
                     # One malformed order must not fail the whole sync.
-                    logger.warning("pomijam zamówienie z Allegro: %s", exc)
+                    logger.warning("Skipping an Allegro order: %s", exc)
             if len(forms) < limit:
                 break
         else:

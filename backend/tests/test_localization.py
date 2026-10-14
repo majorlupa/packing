@@ -8,9 +8,7 @@ stay request-scoped so two concurrent requests never see each other's language.
 import threading
 
 import pytest
-
 from conftest import sample_order
-
 
 # ---------------------------------------------------------------- negotiation
 
@@ -83,7 +81,9 @@ def test_translation_formats_parameters_and_keeps_upstream_text():
     assert "Connect Allegro" in detail
     assert "Authorize Allegro" not in detail
     assert "boom" not in localization.t("common.allegro_unreachable", error="boom")
-    assert localization.t("common.allegro_unreachable", lang="en", error="boom") == "Cannot reach Allegro. Please try again."
+    assert localization.t("common.allegro_unreachable", lang="en", error="boom") == (
+        "Cannot reach Allegro. Please try again."
+    )
 
 
 def test_unknown_key_is_visible_instead_of_silently_empty():
@@ -328,9 +328,8 @@ def test_seed_mock_refusal_is_localized(client, monkeypatch):
 
 
 def test_sync_connectivity_failure_is_localized(app_env, client, monkeypatch):
-    import httpx
-
     import api.allegro as allegro
+    import httpx
 
     async def failing(_limit=100):
         raise httpx.ConnectError("connection refused")
@@ -539,9 +538,8 @@ def test_allegro_not_authorized_message_is_localized(app_env, client):
 
 def test_allegro_invalid_data_message_is_localized(app_env, client, monkeypatch):
     """A gateway HTML page from Allegro must read as a translated 502."""
-    import httpx
-
     import api.allegro as allegro
+    import httpx
 
     class FakeResponse:
         is_success = True
@@ -576,9 +574,8 @@ def test_allegro_invalid_data_message_is_localized(app_env, client, monkeypatch)
 
 
 def test_allegro_incomplete_sync_message_is_localized(app_env, client, monkeypatch):
-    import httpx
-
     import api.allegro as allegro
+    import httpx
 
     class FakeResponse:
         is_success = True
@@ -711,9 +708,8 @@ def test_oauth_rejected_interpolates_the_error_in_both_languages():
 
 def _install_allegro_transport(monkeypatch, handler):
     """Route api.allegro's HTTP calls to ``handler``; leave the ASGI test client intact."""
-    import httpx
-
     import api.allegro as allegro
+    import httpx
 
     real_client = httpx.AsyncClient
     monkeypatch.setattr(
@@ -813,7 +809,6 @@ def _proposal_response():
 
 def test_allegro_create_shipment_wrapper_is_english_diagnostic(app_env, monkeypatch):
     import httpx
-
     from models.order import Order
 
     def handler(request):
@@ -837,7 +832,6 @@ def test_allegro_create_shipment_wrapper_is_english_diagnostic(app_env, monkeypa
 
 def test_allegro_shipment_status_wrapper_is_english_diagnostic(app_env, monkeypatch):
     import httpx
-
     from models.order import Order
 
     def handler(request):

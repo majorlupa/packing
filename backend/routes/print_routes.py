@@ -14,17 +14,17 @@ import uuid
 from datetime import date
 from pathlib import Path
 
+import api.allegro as allegro
 import httpx
-from fastapi import APIRouter, HTTPException, UploadFile, File, Query
+import store
+from api.allegro import to_http_exception
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from jinja2 import Environment, FileSystemLoader
+from localization import current_language, date_format, t
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-import store
-import api.allegro as allegro
-from api.allegro import to_http_exception
-from localization import current_language, date_format, t
 from routes.documents import active_template, has_content, personalized_pdf
 
 router = APIRouter(prefix="/print", tags=["print"])
@@ -258,7 +258,7 @@ async def create_label(
 
 
         except (allegro.AllegroError, httpx.HTTPError) as exc:
-            raise to_http_exception(exc)
+            raise to_http_exception(exc) from exc
 
     return {"shipment_id": shipment_id, "tracking_number": tracking_number}
 
@@ -275,7 +275,7 @@ async def print_label(order_id: str):
     try:
         label_bytes = await allegro.download_label(order.shipment_id, settings["package"].get("page_size", "A6"))
     except (allegro.AllegroError, httpx.HTTPError) as exc:
-        raise to_http_exception(exc)
+        raise to_http_exception(exc) from exc
     return Response(content=label_bytes, media_type="application/pdf", headers={"Cache-Control": "no-store"})
 
 
@@ -327,7 +327,7 @@ def print_sales_document(order_id: str):
 def print_combined(order_id: str):
     """Invoice + selected custom doc merged into one PDF (render off the event loop)."""
     import weasyprint
-    from pypdf import PdfWriter, PdfReader
+    from pypdf import PdfReader, PdfWriter
 
     html = _build_invoice_html(order_id)
     invoice_pdf = weasyprint.HTML(string=html).write_pdf()
@@ -373,7 +373,8 @@ def custom_doc_info():
 
 
 @router.post("/custom-doc")
-async def upload_custom_doc(file: UploadFile = File(...)):
+# FastAPI uses File metadata in the default to declare a required multipart field.
+async def upload_custom_doc(file: UploadFile = File(...)):  # noqa: B008
     if not (file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail=t("print.pdf_required"))
     payload = await file.read(MAX_CUSTOM_DOC_BYTES + 1)

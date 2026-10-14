@@ -1,7 +1,6 @@
 """Upstream diagnostic text belongs in logs, never in public HTTP errors."""
-import pytest
 import httpx
-
+import pytest
 from conftest import sample_order
 
 

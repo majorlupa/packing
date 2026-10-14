@@ -7,11 +7,10 @@ from datetime import date
 from html import escape
 from typing import Literal
 
-from PIL import Image
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
 from localization import current_language, date_format, t
 from models.order import Order
+from PIL import Image
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 PLACEHOLDERS = {"buyer_name", "buyer_address", "order_number", "date", "courier", "pickup_point", "tracking_number"}
 _TOKEN = re.compile(r"\{\{\s*([a-z_]+)\s*\}\}")
@@ -21,7 +20,9 @@ MAX_LOGO_BYTES = 2 * 1024 * 1024
 def validate_text(text: str) -> None:
     tokens = _TOKEN.findall(text)
     remainder = _TOKEN.sub("", text)
-    if any(token not in PLACEHOLDERS for token in tokens) or any(marker in remainder for marker in ("{{", "}}", "{%", "%}", "{#", "#}")):
+    if any(token not in PLACEHOLDERS for token in tokens) or any(
+        marker in remainder for marker in ("{{", "}}", "{%", "%}", "{#", "#}")
+    ):
         raise ValueError(t("document.invalid_fields"))
 
 
@@ -36,7 +37,10 @@ def validate_logo(image: str) -> bytes:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with Image.open(io.BytesIO(content)) as logo:
-                if logo.format != {"png": "PNG", "jpeg": "JPEG"}[match.group(1)] or logo.width * logo.height > 16_000_000:
+                if (
+                    logo.format != {"png": "PNG", "jpeg": "JPEG"}[match.group(1)]
+                    or logo.width * logo.height > 16_000_000
+                ):
                     raise ValueError("Invalid image format or dimensions")
                 logo.verify()
         return content
@@ -125,9 +129,14 @@ def render_document_html(template: DocumentTemplate, order: Order) -> str:
             tag = "h2" if block.type == "heading" else "p"
             sections.append(f'<{tag} class="text" style="{style}">{text(block.text)}</{tag}>')
         elif block.type == "logo" and block.image:
-            sections.append(f'<div style="{style}"><img class="logo" src="{escape(block.image, quote=True)}" alt=""></div>')
+            sections.append(
+                f'<div style="{style}"><img class="logo" src="{escape(block.image, quote=True)}" alt=""></div>'
+            )
         elif block.type == "customer":
-            sections.append(f'<section class="customer text" style="{style}">{escape(order.buyer_name)}\n{escape(order.buyer_address)}</section>')
+            sections.append(
+                f'<section class="customer text" style="{style}">{escape(order.buyer_name)}\n'
+                f'{escape(order.buyer_address)}</section>'
+            )
         elif block.type == "items":
             headers = [t("doc.product"), t("doc.quantity")]
             if block.show_prices:
@@ -142,15 +151,21 @@ def render_document_html(template: DocumentTemplate, order: Order) -> str:
             total = ''
             if block.show_prices and order.items and all(item.unit_price is not None for item in order.items):
                 amount = sum(item.quantity * item.unit_price for item in order.items)
-                total = f'<tbody class="total"><tr><td colspan="3">{escape(t("doc.total"))}</td><td>{amount:.2f} zł</td></tr></tbody>'
-            sections.append(f'<table style="{style}"><thead><tr>' + ''.join(f'<th>{escape(header)}</th>' for header in headers)
-                            + '</tr></thead><tbody>' + ''.join(rows) + '</tbody>' + total + '</table>')
+                total = (
+                    f'<tbody class="total"><tr><td colspan="3">{escape(t("doc.total"))}</td>'
+                    f'<td>{amount:.2f} zł</td></tr></tbody>'
+                )
+            sections.append(
+                f'<table style="{style}"><thead><tr>' + ''.join(f'<th>{escape(header)}</th>' for header in headers)
+                + '</tr></thead><tbody>' + ''.join(rows) + '</tbody>' + total + '</table>'
+            )
     return ('<!doctype html><html lang="' + current_language.get() + '"><head><meta charset="utf-8"><title>'
             + escape(template.name) + '</title><style>'
             '@page{size:A4;margin:18mm}body{font-family:DejaVu Sans,sans-serif;color:#222;font-size:12pt}'
             'h2,p,section,table{margin:0 0 6mm}.text{white-space:pre-wrap;overflow-wrap:anywhere}'
             'h2{break-after:avoid}.logo{max-width:65mm;max-height:35mm;margin-bottom:6mm}'
-            'table{border-collapse:collapse;width:100%;table-layout:fixed}th,td{padding:3mm;border-bottom:1px solid #ddd;overflow-wrap:anywhere}'
+            'table{border-collapse:collapse;width:100%;table-layout:fixed}'
+            'th,td{padding:3mm;border-bottom:1px solid #ddd;overflow-wrap:anywhere}'
             'th:first-child,td:first-child{width:48%}thead{display:table-header-group}tr{break-inside:avoid}.total{font-weight:bold}'
             '</style></head><body>' + ''.join(sections) + '</body></html>')
 

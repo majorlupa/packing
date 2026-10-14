@@ -1,20 +1,18 @@
 import logging
 import os
 import secrets
-import time
 import threading
+import time
 from html import escape
 
+import api.allegro as allegro
+import httpx
+import store
+from api.allegro import to_http_exception
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from typing import List
-import httpx
-from starlette.concurrency import run_in_threadpool
-
-import store
-import api.allegro as allegro
-from api.allegro import to_http_exception
 from localization import negotiate_language, t
+from starlette.concurrency import run_in_threadpool
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 logger = logging.getLogger("packing.orders")
@@ -83,7 +81,7 @@ def _oauth_error_page(language: str, message: str, status_code: int = 400) -> HT
     return HTMLResponse(content=html, status_code=status_code, headers={"Cache-Control": "no-store"})
 
 
-@router.get("/", response_model=List[dict])
+@router.get("/", response_model=list[dict])
 def list_orders():
     orders = store.get_orders()
     return [{**o.model_dump(), "delivery_type": "inpost_locker" if o.is_inpost_locker else "courier"}
@@ -112,12 +110,12 @@ async def sync_from_allegro():
         # substituting three fake orders for a real sync would hide a broken
         # Allegro connection behind a healthy-looking "added: 3".
         if allegro.dry_run_enabled() and not await run_in_threadpool(allegro.is_authorized):
-            logger.warning("Brak autoryzacji Allegro w trybie dry run: używam zamówień testowych.")
+            logger.warning("No Allegro authorization in dry-run mode: using test orders.")
             new_orders = allegro._generate_mock_orders()
         else:
-            raise to_http_exception(exc)
+            raise to_http_exception(exc) from exc
     except (allegro.AllegroError, httpx.HTTPError) as exc:
-        raise to_http_exception(exc)
+        raise to_http_exception(exc) from exc
 
     def mutate(state):
         # Read the archive inside the transaction: a concurrent "end of day" must not be missed.
@@ -239,5 +237,5 @@ async def auth_callback(
     try:
         await allegro.exchange_code(code)
     except (allegro.AllegroError, httpx.HTTPError) as exc:
-        raise to_http_exception(exc, lang=language)
+        raise to_http_exception(exc, lang=language) from exc
     return RedirectResponse(f"{UI_BASE_URL}/")

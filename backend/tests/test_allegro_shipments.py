@@ -5,7 +5,6 @@ from copy import deepcopy
 
 import httpx
 import pytest
-
 from conftest import sample_order
 
 
@@ -305,9 +304,8 @@ def test_sync_does_not_hide_upstream_failure_behind_mock_orders(app_env, client,
 
 def test_sync_reports_network_failure_in_dry_run(app_env, client, monkeypatch):
     """A dropped connection is not an authorization gap; it stays a 502."""
-    import httpx
-
     import api.allegro as allegro
+    import httpx
     monkeypatch.setenv('PACKING_SHIPMENT_DRY_RUN', '1')
     allegro._token, allegro._refresh_token, allegro._expires_at = 'tok', 'ref', 0.0
 

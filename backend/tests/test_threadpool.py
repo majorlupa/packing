@@ -36,7 +36,7 @@ def test_two_concurrent_oauth_flows(app_env, monkeypatch, rejected):
             assert states[0] != states[1]
             params = [
                 {"state": state, "error": "access_denied"} if rejected else {"state": state, "code": language}
-                for state, language in zip(states, ("pl", "en"))
+                for state, language in zip(states, ("pl", "en"), strict=False)
             ]
             responses = await asyncio.gather(*(
                 client.get("/api/orders/auth/callback", params=flow, headers={"Accept-Language": "en"})
@@ -44,7 +44,7 @@ def test_two_concurrent_oauth_flows(app_env, monkeypatch, rejected):
             ))
             if rejected:
                 assert [response.status_code for response in responses] == [400, 400]
-                for response, language in zip(responses, ("pl", "en")):
+                for response, language in zip(responses, ("pl", "en"), strict=False):
                     assert f'<html lang="{language}">' in response.text
                 assert exchanged == []
             else:
@@ -62,13 +62,16 @@ def test_two_concurrent_oauth_flows(app_env, monkeypatch, rejected):
 
 
 def test_routes_without_await_are_sync(app_env):
-    from fastapi.routing import APIRoute
     import ast
+
+    from fastapi.routing import APIRoute
 
     for route in app_env.app.routes:
         if isinstance(route, APIRoute) and inspect.iscoroutinefunction(route.endpoint):
             tree = ast.parse(inspect.getsource(route.endpoint))
-            assert any(isinstance(node, (ast.Await, ast.AsyncWith, ast.AsyncFor)) for node in ast.walk(tree)), route.path
+            assert any(
+                isinstance(node, (ast.Await, ast.AsyncWith, ast.AsyncFor)) for node in ast.walk(tree)
+            ), route.path
 
 
 def test_upload_pdf_processing_runs_in_worker(app_env, monkeypatch):

@@ -4,7 +4,6 @@ from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
-
 from conftest import sample_order
 
 

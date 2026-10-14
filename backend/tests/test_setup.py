@@ -33,7 +33,7 @@ def first_run(app_env, monkeypatch, access_token=ACCESS_TOKEN):
     monkeypatch.setenv("PACKING_ACCESS_TOKEN", access_token)
     app_env.env_file.write_text(
         "# Keep my settings\nALLEGRO_CLIENT_ID=\nALLEGRO_CLIENT_SECRET=\n"
-        "ALLEGRO_SANDBOX=true\nINPOST_SHIPX_TOKEN=preserve-me\n"
+        "ALLEGRO_SANDBOX=true\nUNRELATED_SETTING=preserve-me\n"
         f"PACKING_ACCESS_TOKEN={access_token}\n",
         encoding="utf-8",
     )
@@ -86,7 +86,7 @@ def test_saves_credentials_preserves_other_settings_and_uses_them_immediately(ap
     saved = dotenv_values(app_env.env_file)
     assert saved["ALLEGRO_CLIENT_ID"] == CLIENT_ID
     assert saved["ALLEGRO_CLIENT_SECRET"] == CLIENT_SECRET
-    assert saved["INPOST_SHIPX_TOKEN"] == "preserve-me"
+    assert saved["UNRELATED_SETTING"] == "preserve-me"
     assert saved["ALLEGRO_SANDBOX"] == "true"
     assert saved["PACKING_ACCESS_TOKEN"] == ACCESS_TOKEN
     assert "# Keep my settings" in app_env.env_file.read_text()
