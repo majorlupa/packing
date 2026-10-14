@@ -143,6 +143,10 @@ const MESSAGES = {
     'done.undo': 'Cofnij',
 
     'settings.title': 'Ustawienia',
+    'settings.documentEditor': 'Edytor dokumentu A4',
+    'settings.documentEditorDesc': 'Zaprojektuj dokument PDF, wstaw pola dynamiczne i importuj lub eksportuj szablony JSON.',
+    'settings.openDocumentEditor': 'Przejdź do edytora dokumentu',
+    'doc.blockPanel': 'Bloki i pola dynamiczne',
     'settings.tabDocuments': 'Dokumenty',
     'settings.tabShipping': 'Wysyłka',
     'settings.tabArchive': 'Archiwum',
@@ -371,6 +375,10 @@ const MESSAGES = {
     'done.undo': 'Undo',
 
     'settings.title': 'Settings',
+    'settings.documentEditor': 'A4 document editor',
+    'settings.documentEditorDesc': 'Design a PDF document, insert placeholders and import or export JSON templates.',
+    'settings.openDocumentEditor': 'Go to document editor',
+    'doc.blockPanel': 'Blocks and placeholders',
     'settings.tabDocuments': 'Documents',
     'settings.tabShipping': 'Shipping',
     'settings.tabArchive': 'Archive',
@@ -1703,7 +1711,7 @@ async function renderSettingsDocuments(panel) {
     </div>
 
     <div class="settings-section">
-      <div id="document-editor"></div>
+      <a class="btn btn-secondary" id="open-document-editor" href="#document-editor-card" data-i18n="settings.openDocumentEditor">${t('settings.openDocumentEditor')}</a>
     </div>
 
     <div class="settings-section">
@@ -1721,7 +1729,19 @@ async function renderSettingsDocuments(panel) {
       </div>
       <p id="custom-doc-note" class="settings-note hidden"></p>
     </div>
+    <section class="settings-section settings-editor-card" id="document-editor-card" aria-labelledby="document-editor-title" tabindex="-1">
+      <h3 id="document-editor-title" data-i18n="settings.documentEditor">${t('settings.documentEditor')}</h3>
+      <p class="settings-desc" data-i18n="settings.documentEditorDesc">${t('settings.documentEditorDesc')}</p>
+      <div id="document-editor"></div>
+    </section>
   `;
+
+  panel.querySelector('#open-document-editor').addEventListener('click', event => {
+    event.preventDefault();
+    const card = panel.querySelector('#document-editor-card');
+    card.focus({ preventScroll: true });
+    card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
 
   panel.querySelector('#btn-doc-pick').setAttribute('data-i18n', uploadAvailable ? 'settings.docReplace' : 'settings.docChoose');
 
@@ -1803,8 +1823,7 @@ async function renderSettingsDocuments(panel) {
   }
   attachDeleteHandler(panel);
 
-  // Below the unchanged invoice controls: the block editor edits the single
-  // active template and selects which source is printed.
+  // Mount once in the full-width card, outside the narrow invoice/upload controls.
   if (typeof DocumentEditor !== 'undefined') {
     DocumentEditor.mount(panel.querySelector('#document-editor'), {
       settings: docSettings,
