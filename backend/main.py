@@ -17,6 +17,7 @@ configuration.load_environment()
 
 import store
 from localization import current_language, negotiate_language, t
+from request_limits import RequestBodyLimitMiddleware
 from routes.documents import router as documents_router
 from routes.orders import router as orders_router
 from routes.print_routes import router as print_router
@@ -46,6 +47,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Packing App", lifespan=lifespan)
+app.add_middleware(RequestBodyLimitMiddleware)
 
 
 @app.exception_handler(RequestValidationError)
