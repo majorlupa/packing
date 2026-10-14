@@ -10,20 +10,22 @@ const catalogSource = source.slice(
   source.indexOf('async function promptForAccessToken'),
 );
 const openPdfSource = source.slice(source.indexOf('async function openPdf('), source.indexOf('\nlet state ='));
-const functionSource = `${catalogSource}\n${openPdfSource}`;
+const errorSource = source.slice(source.indexOf('function apiErrorMessage('), source.indexOf('let toastTimer'));
+const functionSource = `${catalogSource}\n${errorSource}\n${openPdfSource}`;
 
-function setup(response, blocked = false) {
+function setup(response, blocked = false, creationError = null) {
   const calls = [];
   const tab = { location: { replace(url) { calls.push(['navigate', url]); } }, close() { calls.push(['close']); } };
   const context = {
     window: { open() { calls.push(['open']); return blocked ? null : tab; } },
     apiFetch: async () => { calls.push(['fetch']); return response; },
+    api: async () => { calls.push(['create']); if (creationError) throw creationError; },
     URL: { createObjectURL: () => 'blob:label', revokeObjectURL() {} },
     setTimeout() {},
   };
   vm.createContext(context);
   vm.runInContext(functionSource, context);
-  return { calls, run: () => context.openPdf('/label') };
+  return { calls, run: () => context.openPdf('/label'), label: () => context.openPdf('/label', {}, () => context.api('/label', { method: 'POST' })) };
 }
 
 test('opens the print tab before waiting for label generation', async () => {
@@ -39,7 +41,27 @@ test('closes print tab and reports API error', async () => {
 });
 
 test('blocked popup does not create an unseen shipment', async () => {
-  const { run, calls } = setup({}, true);
-  await assert.rejects(run, /przeglądar/i);
+  const { label, calls } = setup({}, true);
+  await assert.rejects(label, /przeglądar/i);
   assert.deepEqual(calls, [['open']]);
+});
+
+test('label creation starts synchronously after popup reservation and before PDF download', async () => {
+  const { label, calls } = setup({ ok: true, blob: async () => ({}) });
+  const pending = label();
+  assert.deepEqual(calls, [['open'], ['create']]);
+  await pending;
+  assert.deepEqual(calls, [['open'], ['create'], ['fetch'], ['navigate', 'blob:label']]);
+});
+
+test('failed label creation closes popup without downloading', async () => {
+  const { label, calls } = setup({}, false, new Error('Creation failed'));
+  await assert.rejects(label, /Creation failed/);
+  assert.deepEqual(calls, [['open'], ['create'], ['close']]);
+});
+
+test('failed PDF download after creation closes popup', async () => {
+  const { label, calls } = setup({ ok: false, json: async () => ({ detail: 'Download failed' }) });
+  await assert.rejects(label, /Download failed/);
+  assert.deepEqual(calls, [['open'], ['create'], ['fetch'], ['close']]);
 });

@@ -212,6 +212,34 @@ test('new locker with parcel size selected enables label button', () => {
   assert.equal(app.view().querySelector('#btn-label').disabled, false);
 });
 
+test('label caller POSTs creation with courier dimensions then GETs PDF without dimensions', async () => {
+  const app = setup([locker('one', { delivery_type: 'courier' })]);
+  const requests = [];
+  app.context.window = { open() {
+    requests.push(['open']);
+    return { location: { replace(url) { requests.push(['navigate', url]); } }, close() {} };
+  } };
+  app.context.URL = { createObjectURL: () => 'blob:label', revokeObjectURL() {} };
+  app.context.setTimeout = () => {};
+  app.context.testApi = async (path, options = {}) => {
+    requests.push([options.method || 'GET', path]);
+    return {};
+  };
+  app.context.testApiFetch = async (path, options = {}) => {
+    requests.push([options.method || 'GET', path]);
+    return { ok: true, blob: async () => ({}) };
+  };
+  vm.runInContext('api = testApi; apiFetch = testApiFetch;', app.context);
+  const pending = app.view().querySelector('#btn-label').dispatch('click');
+  assert.deepEqual(requests, [['open'], ['POST', '/print/orders/one/label?length=30&width=20&height=15&weight=1']]);
+  await pending;
+  assert.deepEqual(requests, [
+    ['open'], ['POST', '/print/orders/one/label?length=30&width=20&height=15&weight=1'],
+    ['GET', '/print/orders/one/label'], ['navigate', 'blob:label'], ['GET', '/print/orders/one/shipment'],
+  ]);
+  assert.equal(app.view().querySelector('#btn-label').disabled, false);
+});
+
 // ---- Seed button gating ----
 // The empty pending list may offer sample orders, but only on an instance
 // running in dry run. On a real instance the endpoint answers 409 and the

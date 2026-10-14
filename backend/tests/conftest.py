@@ -55,8 +55,8 @@ def app_env(tmp_path, monkeypatch):
         if name in PACKAGE_MODULES or name.startswith(("api.", "routes.")):
             del sys.modules[name]
 
-    import store  # noqa: E402
     import main  # noqa: E402
+    import store  # noqa: E402
 
     def write_state(state):
         (data_dir / "state.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
