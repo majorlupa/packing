@@ -237,6 +237,26 @@ tekst bez przebudowywania formularzy i kolejek.
 Backend udostępnia statyczny frontend i API na porcie 3001. Stan aplikacji i tokeny
 Allegro są zapisywane w `data/` i zachowywane po restartach kontenera.
 
+### Sterowanie przez MCP (LLM)
+
+Katalog `mcp_server/` zawiera serwer MCP, który wykonuje te same czynności co
+interfejs, wywołując istniejące endpointy API: pobieranie zamówień, kolejki i statusy,
+listy kompletowania, gabaryty A/B/C, etykiety i dokumenty, ustawienia. Działa jako
+osobny proces (domyślnie stdio) i nie zmienia zachowania aplikacji.
+
+```sh
+python3 -m venv .venv
+.venv/bin/pip install -r mcp_server/requirements.txt
+export PACKING_ACCESS_TOKEN='<token z .env>'
+.venv/bin/python -m mcp_server serve                       # serwer MCP dla klienta LLM
+.venv/bin/python -m mcp_server sync-loop --interval 300    # synchronizacja bez LLM
+```
+
+`print_label` tworzy przesyłkę (najwyżej raz na zamówienie) i drukuje etykietę przez
+CUPS (`lp`, kolejka z `PACKING_PRINTER` albo domyślna). Konfiguracja, pełna lista
+narzędzi z endpointami, przykład systemd/cron i ustawienia drukowania:
+[docs/mcp-server.md](docs/mcp-server.md).
+
 ### Licencja
 
 Projekt jest udostępniany na [licencji MIT](LICENSE). Można go używać, modyfikować
@@ -475,6 +495,26 @@ Language switching updates text in place rather than rebuilding forms or queues.
 
 The backend serves the static frontend and API on port 3001. State and Allegro
 tokens are persisted in `data/` across container restarts.
+
+### MCP control (LLM)
+
+`mcp_server/` holds an MCP server that performs the same actions as the UI by
+calling the existing API endpoints: order sync, queues and statuses, picking lists,
+locker sizes A/B/C, labels and documents, settings. It runs as a separate process
+(stdio by default) and does not change how the app behaves.
+
+```sh
+python3 -m venv .venv
+.venv/bin/pip install -r mcp_server/requirements.txt
+export PACKING_ACCESS_TOKEN='<token from .env>'
+.venv/bin/python -m mcp_server serve                       # MCP server for an LLM client
+.venv/bin/python -m mcp_server sync-loop --interval 300    # sync without an LLM
+```
+
+`print_label` creates the shipment (at most once per order) and prints the label
+through CUPS (`lp`, the `PACKING_PRINTER` queue or the default). Setup, the full tool
+list with routes, a systemd/cron example and printing notes:
+[docs/mcp-server.md](docs/mcp-server.md).
 
 ### License
 
