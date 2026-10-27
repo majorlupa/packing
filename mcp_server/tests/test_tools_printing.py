@@ -1,12 +1,15 @@
 """Label/document download and CUPS printing, with `lp` mocked."""
 import asyncio
+import stat
 import subprocess
+import threading
 
 import pytest
 from helpers import PDF_BYTES, FakeAPI, make_order
 
 from mcp_server.client import PackingError
 from mcp_server.printing import print_pdf
+from mcp_server.tools import _write_pdf
 
 
 class FakeLP:
@@ -181,6 +184,21 @@ def test_print_pdf_refuses_a_non_pdf_file(tmp_path, fake_lp):
         print_pdf(path)
 
 
+def test_invalid_copies_do_not_create_a_shipment(tmp_path, fake_lp):
+    api = _label_api(tmp_path)
+    with pytest.raises(PackingError, match="copies must be a whole number"):
+        asyncio.run(api.tools(label_dir=str(tmp_path)).print_label("o1", copies=0))
+    assert api.calls() == []
+
+
+def test_missing_lp_does_not_create_a_shipment(tmp_path, monkeypatch):
+    api = _label_api(tmp_path)
+    monkeypatch.setattr("mcp_server.printing.shutil.which", lambda _name: None)
+    with pytest.raises(PackingError, match="cups-client"):
+        asyncio.run(api.tools(label_dir=str(tmp_path)).print_label("o1"))
+    assert api.calls() == []
+
+
 def test_print_pdf_reports_a_missing_file(tmp_path, fake_lp):
     with pytest.raises(PackingError, match="does not exist"):
         print_pdf(tmp_path / "missing.pdf")
@@ -230,3 +248,51 @@ def test_unknown_document_kind_is_rejected(tmp_path):
     tools = api.tools(label_dir=str(tmp_path))
     with pytest.raises(PackingError, match="document must be"):
         asyncio.run(tools.download_document("o1", "invoice"))
+
+
+def test_generated_pdf_paths_are_unique_and_private(tmp_path):
+    first = _write_pdf(PDF_BYTES, str(tmp_path), "label-order")
+    second = _write_pdf(PDF_BYTES + b"second", str(tmp_path), "label-order")
+    assert first != second
+    assert first.read_bytes() == PDF_BYTES
+    assert stat.S_IMODE(first.stat().st_mode) == 0o600
+
+
+def test_default_pdf_directory_is_private():
+    path = _write_pdf(PDF_BYTES, "", "label-order")
+    try:
+        assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    finally:
+        path.unlink()
+        path.parent.rmdir()
+
+
+@pytest.mark.parametrize("tool_name", ["print_label", "print_document"])
+def test_slow_printer_does_not_block_health(tmp_path, fake_lp, monkeypatch, tool_name):
+    api = _label_api(tmp_path)
+    api.add("GET", "/health", json_body={"status": "ok"})
+    api.add("GET", "/api/print/orders/o1/document", content=PDF_BYTES)
+    started, release = threading.Event(), threading.Event()
+    original_run = fake_lp.run
+
+    def slow_run(command, **kwargs):
+        started.set()
+        release.wait(2)
+        return original_run(command, **kwargs)
+
+    monkeypatch.setattr("mcp_server.printing.subprocess.run", slow_run)
+    tools = api.tools(label_dir=str(tmp_path))
+
+    async def exercise():
+        kwargs = {"document": "sales"} if tool_name == "print_document" else {}
+        task = asyncio.create_task(getattr(tools, tool_name)("o1", **kwargs))
+        try:
+            assert await asyncio.to_thread(started.wait, 1)
+            assert not task.done(), "Printing blocked the event loop until the subprocess exited"
+            assert await asyncio.wait_for(tools.get_app_health(), 0.5) == {"status": "ok"}
+        finally:
+            release.set()
+            await task
+
+    asyncio.run(exercise())

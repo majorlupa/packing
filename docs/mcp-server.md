@@ -61,7 +61,7 @@ Other commands:
 | `PACKING_ACCESS_TOKEN` | — | Bearer token the app expects. Required for every tool except `get_app_health`. Never logged, never returned by a tool. |
 | `PACKING_LANGUAGE` | `en` | `Accept-Language` sent with each request (`pl` or `en`). The app answers messages and renders documents in that language. |
 | `PACKING_PRINTER` | CUPS default | Printer queue for `print_label` / `print_document` when the tool call does not name one. |
-| `PACKING_LABEL_DIR` | `<tmp>/packing-labels` | Where downloaded PDFs are written when a tool call does not name a path. |
+| `PACKING_LABEL_DIR` | Private `<tmp>/packing-labels-*` directory | Where downloaded PDFs are written when a tool call does not name a path. Generated filenames are unique and files have mode `0600`. |
 | `PACKING_API_TIMEOUT` | `60` | HTTP timeout in seconds (label creation can poll Allegro for a while). |
 | `PACKING_MCP_HOST` | `127.0.0.1` | Bind address for streamable-HTTP. |
 | `PACKING_MCP_PORT` | `8765` | Port for streamable-HTTP. |

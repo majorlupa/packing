@@ -43,6 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     serve.add_argument("--host", default=None, help="bind address for streamable-http")
     serve.add_argument("--port", type=int, default=None, help="port for streamable-http")
+    parser.set_defaults(host=None, port=None, transport=os.getenv("PACKING_MCP_TRANSPORT", "stdio"))
 
     once = subparsers.add_parser("sync-once", help="run one Allegro order sync and exit")
     once.set_defaults(command="sync-once")

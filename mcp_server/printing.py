@@ -15,6 +15,19 @@ _JOB_RE = re.compile(r"request id is (\S+)")
 MAX_COPIES = 99
 
 
+def validate_print_request(copies: int) -> str:
+    """Check local prerequisites before any carrier booking and return lp's path."""
+    if not isinstance(copies, int) or isinstance(copies, bool) or not 1 <= copies <= MAX_COPIES:
+        raise PackingError(f"copies must be a whole number between 1 and {MAX_COPIES}")
+    executable = shutil.which("lp")
+    if executable is None:
+        raise PackingError(
+            "The CUPS `lp` command was not found. Install the CUPS client "
+            "(Debian/Ubuntu: cups-client), make sure a printer is configured, and retry."
+        )
+    return executable
+
+
 @dataclass(frozen=True)
 class PrintJob:
     job_id: str | None
@@ -30,8 +43,7 @@ def print_pdf(
     title: str | None = None,
 ) -> PrintJob:
     """Print an existing PDF file with ``lp`` and return the queued job."""
-    if not isinstance(copies, int) or isinstance(copies, bool) or not 1 <= copies <= MAX_COPIES:
-        raise PackingError(f"copies must be a whole number between 1 and {MAX_COPIES}")
+    executable = validate_print_request(copies)
 
     path = Path(path)
     if not path.is_file():
@@ -43,13 +55,6 @@ def print_pdf(
         raise PackingError(f"Cannot read {path}: {exc}") from None
     if magic != b"%PDF-":
         raise PackingError(f"Refusing to print {path}: it is not a PDF file.")
-
-    executable = shutil.which("lp")
-    if executable is None:
-        raise PackingError(
-            "The CUPS `lp` command was not found. Install the CUPS client "
-            "(Debian/Ubuntu: cups-client), make sure a printer is configured, and retry."
-        )
 
     command = [executable]
     if printer:

@@ -6,6 +6,8 @@ named in the docstring and in docs/mcp-server.md.
 
 Tools never invent an endpoint and never touch the state file directly.
 """
+import asyncio
+import os
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,7 +15,7 @@ from typing import Literal
 
 from .client import PackingClient, PackingError
 from .config import Settings
-from .printing import print_pdf
+from .printing import print_pdf, validate_print_request
 
 DocumentKind = Literal["auto", "custom", "sales", "combined"]
 OrderStatus = Literal["pending", "picking", "packing", "done"]
@@ -29,11 +31,17 @@ def _slug(value: str) -> str:
 
 
 def _write_pdf(content: bytes, directory: str, stem: str) -> Path:
-    target_dir = Path(directory).expanduser() if directory else Path(tempfile.gettempdir()) / "packing-labels"
+    target_dir = Path(directory).expanduser() if directory else Path(tempfile.mkdtemp(prefix="packing-labels-"))
     target_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    path = target_dir / f"{_slug(stem)}-{stamp}.pdf"
-    path.write_bytes(content)
+    fd, filename = tempfile.mkstemp(prefix=f"{_slug(stem)}-{stamp}-", suffix=".pdf", dir=target_dir)
+    path = Path(filename)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(content)
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
     return path
 
 
@@ -324,8 +332,8 @@ class PackingTools:
 
         Calls GET /api/print/orders/{id}/label. Requires a shipment (call
         create_label first); the API answers 409 otherwise. The PDF is written to
-        output_path, or to PACKING_LABEL_DIR (default: a packing-labels folder in
-        the system temp directory). Returns {"path", "bytes"}.
+        output_path, or to PACKING_LABEL_DIR (default: a private packing-labels-*
+        folder in the system temp directory). Returns {"path", "bytes"}.
         """
         order = await self._find_order(order_id)
         content = await self.client.label_pdf(order_id)
@@ -353,6 +361,7 @@ class PackingTools:
         neither set, CUPS uses its default queue. Returns the saved PDF path, the
         CUPS job id, the printer, and the shipment id/tracking number.
         """
+        validate_print_request(copies)
         order = await self._find_order(order_id)
         shipment_created = False
         shipment = await self.client.shipment_info(order_id)
@@ -376,8 +385,8 @@ class PackingTools:
         content = await self.client.label_pdf(order_id)
         allegro_id = order.get("allegro_id") or order_id
         path = self._save(content, order_id, None, f"label-{allegro_id}")
-        job = print_pdf(
-            path,
+        job = await asyncio.to_thread(
+            print_pdf, path,
             printer=printer or self.settings.printer or None,
             copies=copies,
             title=f"Label {allegro_id}",
@@ -434,13 +443,14 @@ class PackingTools:
         with the matching route and sent to `lp` (PACKING_PRINTER or the CUPS
         default queue).
         """
+        validate_print_request(copies)
         order = await self._find_order(order_id)
         kind = await self._resolve_document(document)
         content = await self.client.document_pdf(order_id, kind)
         allegro_id = order.get("allegro_id") or order_id
         path = self._save(content, order_id, None, f"{kind}-{allegro_id}")
-        job = print_pdf(
-            path,
+        job = await asyncio.to_thread(
+            print_pdf, path,
             printer=printer or self.settings.printer or None,
             copies=copies,
             title=f"{kind.title()} {allegro_id}",

@@ -105,6 +105,14 @@ def test_cli_defaults_to_serve_on_stdio():
     assert args.log_level in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 
+def test_cli_without_subcommand_starts_stdio(monkeypatch):
+    transports = []
+    monkeypatch.setattr("mcp.server.fastmcp.FastMCP.run",
+                        lambda self, *, transport: transports.append(transport))
+    assert cli.main([]) == 0
+    assert transports == ["stdio"]
+
+
 def test_cli_parses_streamable_http_and_sync_loop():
     parser = cli.build_parser()
     http_args = parser.parse_args(["serve", "--transport", "streamable-http", "--port", "9000"])
