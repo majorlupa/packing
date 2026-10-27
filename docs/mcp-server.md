@@ -22,7 +22,7 @@ description and in the tables below.
 - Python 3.11 or newer
 - A running Weles app reachable over HTTP (default `http://127.0.0.1:3001`)
 - The app's access token (`PACKING_ACCESS_TOKEN` from the app's `.env`, at least
-  32 characters — the app refuses shorter tokens)
+  32 characters — with a shorter one the app answers 503 and no tool can work)
 - For printing: CUPS with a configured printer and the `lp` command
 
 ## Install and run
@@ -267,6 +267,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# The user that may talk to the app and print (member of lp, or the queue's owner).
 User=packing
 WorkingDirectory=/opt/packing
 EnvironmentFile=/etc/packing-mcp.env
