@@ -35,7 +35,7 @@
   font-family: var(--font-sans);
 }
 .editor-canvas-block { position: absolute; box-sizing: border-box; cursor: move; touch-action: none; outline: 1px dashed #aaa7; line-height: 1.2; }
-.editor-canvas-block.selected, .editor-canvas-block:focus-visible { outline: 2px solid var(--accent); z-index: 1; }
+.editor-canvas-block.selected, .editor-canvas-block:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; z-index: 1; }
 .editor-canvas-content { height: 100%; width: 100%; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
 .editor-canvas-content img { width: 100%; height: 100%; object-fit: contain; }
 .editor-canvas-content table { width: 100%; border-collapse: collapse; table-layout: fixed; font: inherit; white-space: normal; }

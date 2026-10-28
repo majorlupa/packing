@@ -21,11 +21,12 @@
   /* Color — status and accent (desaturated; color only where it means something) */
   --accent: #7c86e8;
   --accent-strong: #5e6ad2;           /* button fills; white text passes AA */
-  --accent-strong-hover: #6973da;
+  --accent-strong-hover: #606cd4;
   --accent-weak: rgba(124, 134, 232, 0.14);
   --accent2: var(--accent);           /* legacy alias */
   --success: #5cbb84;
   --success-strong: #308058;
+  --success-strong-hover: #31815a;
   --success-weak: rgba(92, 187, 132, 0.12);
   --warning: #d4a24c;
   --warning-weak: rgba(212, 162, 76, 0.12);
@@ -430,7 +431,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 }
 
 .btn-done { background: var(--success-strong); color: #fff; }
-.btn-done:hover { background: #358a60; }
+.btn-done:hover { background: var(--success-strong-hover); }
 
 .btn-secondary, .btn-invoice, .btn-custom-doc {
   background: transparent;
@@ -898,7 +899,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .editor-save { background: var(--accent-strong); color: #fff; }
 .editor-save:hover:not(:disabled) { background: var(--accent-strong-hover); }
 .editor-save:disabled, .editor-preview:disabled { opacity: 0.5; cursor: default; }
-.editor-preview { background: transparent; color: var(--text); border-color: var(--border-strong); }
+.editor-actions .editor-preview { background: transparent; color: var(--text); border-color: var(--border-strong); }
 .editor-preview:hover:not(:disabled) { background: var(--hover); }
 .editor-status { font-size: var(--text-sm); color: var(--text-muted); }
 .editor-preview-note { font-size: var(--text-sm); color: var(--text-muted); }
