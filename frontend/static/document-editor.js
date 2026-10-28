@@ -282,7 +282,7 @@ var DocumentEditor = (function () {
     var title = el('span', 'editor-block-title');
     setText(title, TYPE_LABEL[block.type]);
     head.appendChild(title);
-    head.addEventListener('click', function (event) { if (event.target.tagName === 'BUTTON') return; draft.selectedIndex = index; syncGeometryInputs(ctx); refreshCanvas(ctx); });
+    head.addEventListener('click', function (event) { if ([up, down, remove].some(function (button) { return button.contains(event.target); })) return; draft.selectedIndex = index; syncGeometryInputs(ctx); refreshCanvas(ctx); });
 
     var up = iconButton('editor-block-up', 'up', 'doc.moveUp');
     var down = iconButton('editor-block-down', 'down', 'doc.moveDown');
@@ -537,7 +537,7 @@ var DocumentEditor = (function () {
         if (event.button !== undefined && event.button !== 0) return;
         event.preventDefault(); select(); node.focus();
         var rect = canvas.getBoundingClientRect();
-        gesture = { id: event.pointerId, x: event.clientX, y: event.clientY, block: { x: block.x, y: block.y, w: block.w, h: block.h }, resize: event.target === resize, width: rect.width, height: rect.height };
+        gesture = { id: event.pointerId, x: event.clientX, y: event.clientY, block: { x: block.x, y: block.y, w: block.w, h: block.h }, resize: resize.contains(event.target), width: rect.width, height: rect.height };
         if (node.setPointerCapture) node.setPointerCapture(event.pointerId);
       });
       node.addEventListener('pointermove', function (event) {

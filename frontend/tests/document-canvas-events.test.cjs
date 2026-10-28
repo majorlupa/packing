@@ -75,6 +75,30 @@ test('resize handle snaps, clamps to A4 and pointer cancel stops updates', () =>
   assert.equal(editor.draft.blocks[0].w,1);
 });
 
+test('dragging the SVG inside a resize handle resizes without moving the block', () => {
+  const {container, editor} = setup([{type:'text',text:'Resize',x:10,y:10,w:30,h:20}]);
+  const node = firstCanvas(container), resize = node.querySelector('.editor-resize');
+  const svg = resize.appendChild(new resize.constructor('svg'));
+  const path = svg.appendChild(new resize.constructor('path'));
+  pointer(node,'pointerdown',0,0,{target:path});
+  pointer(node,'pointermove',10,6);
+  assert.equal(editor.draft.blocks[0].x,10);
+  assert.equal(editor.draft.blocks[0].y,10);
+  assert.equal(editor.draft.blocks[0].w,35);
+  assert.equal(editor.draft.blocks[0].h,23);
+});
+
+test('clicking an SVG block action never selects the stale row index', () => {
+  const {container, editor} = setup([{type:'text',text:'First'},{type:'text',text:'Last'}]);
+  const head = container.querySelectorAll('.editor-block-head')[1];
+  const button = head.querySelector('.editor-block-remove');
+  const svg = button.appendChild(new button.constructor('svg'));
+  button.click();
+  head.dispatch('click',{target:svg});
+  assert.equal(editor.draft.blocks.length,1);
+  assert.ok(editor.draft.selectedIndex < editor.draft.blocks.length);
+});
+
 test('wrong pointer and non-primary button cannot mutate geometry', () => {
   const {container,editor} = setup([{type:'line',x:12,y:13,w:40,h:1}]);
   const node = firstCanvas(container);
