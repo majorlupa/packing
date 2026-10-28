@@ -109,6 +109,16 @@ function setup(orders) {
   };
 }
 
+test('existing labels retain their printed appearance after card navigation', () => {
+  const app = setup([locker('one', {shipment_id:'shipment', parcel_size:'B'}), locker('two')]);
+  const printed = () => /<button class="[^"]*\bprinted\b[^"]*" id="btn-label"/.test(app.view().innerHTML);
+  assert.equal(printed(), true);
+  app.next();
+  assert.equal(printed(), false);
+  app.previous();
+  assert.equal(printed(), true);
+});
+
 test('an unsaved locker requires explicit selection, including A', async () => {
   const order = locker('one');
   const app = setup([order]);

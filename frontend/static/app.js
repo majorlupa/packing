@@ -1385,7 +1385,7 @@ function renderPackingCard(el) {
       ${lockerNeedsSize ? `<p class="parcel-size-note" data-i18n="packing.selectSizeNote">${t('packing.selectSizeNote')}</p>` : ''}
       <p id="parcel-size-status" class="parcel-size-note" role="status" aria-live="polite">${esc(parcelSizeStatusText(order))}</p>
       <div class="pack-buttons">
-        <button class="btn btn-label" id="btn-label" ${lockerNeedsSize || pendingSize ? 'disabled' : ''}>${esc(labelButtonText(isLocker, Boolean(order.shipment_id), false))}</button>
+        <button class="btn btn-label${order.shipment_id ? ' printed' : ''}" id="btn-label" ${lockerNeedsSize || pendingSize ? 'disabled' : ''}>${esc(labelButtonText(isLocker, Boolean(order.shipment_id), false))}</button>
         <button class="btn btn-invoice" id="btn-document">${icon('print')}<span data-i18n="${state.customDocAvailable ? 'packing.customDoc' : 'packing.invoice'}">${t(state.customDocAvailable ? 'packing.customDoc' : 'packing.invoice')}</span></button>
         <button class="btn btn-done" id="btn-done"><span data-i18n="packing.done">${t('packing.done')}</span></button>
       </div>
