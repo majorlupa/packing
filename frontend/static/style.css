@@ -116,7 +116,7 @@ button, input, select, textarea { font-family: inherit; }
   white-space: pre-line;
   overflow-wrap: anywhere;
 }
-.toast:empty { padding: 0; border: 0; box-shadow: none; }
+.toast:empty { display: none; }
 .toast-error { border-color: var(--danger-border); }
 .toast-error::before {
   content: '';
