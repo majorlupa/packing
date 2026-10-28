@@ -325,15 +325,15 @@
     global.document.body.classList.add('demo-mode');
     const header = global.document.createElement('header');
     header.className = 'demo-bar';
-    header.innerHTML = `<a class="demo-brand" href="./">Weles <span>DEMO</span></a>
+    header.innerHTML = `<a class="demo-brand" href="./">Weles <span>Demo</span></a>
       <p>Fikcyjne zamówienia. Bez konta. Wypróbuj cały proces.</p>
       <div><button id="demo-tour" type="button">Przewodnik</button><button id="demo-reset" type="button">Zacznij od nowa</button>
-      <a href="https://github.com/majorlupa/packing" target="_blank" rel="noopener noreferrer">GitHub ↗</a></div>`;
+      <a href="https://github.com/majorlupa/packing" target="_blank" rel="noopener noreferrer">GitHub</a></div>`;
     global.document.body.prepend(header);
     const guide = global.document.createElement('section');
     guide.id = 'demo-guide'; guide.className = 'demo-guide hidden';
     guide.setAttribute('aria-label', 'Przewodnik po demo');
-    guide.innerHTML = `<div class="demo-guide-top"><span id="demo-step"></span><button id="demo-skip-guide" type="button">Pomiń przewodnik ×</button></div>
+    guide.innerHTML = `<div class="demo-guide-top"><span id="demo-step"></span><button id="demo-skip-guide" type="button">Pomiń przewodnik</button></div>
       <div aria-live="polite"><h2 id="demo-guide-title"></h2><p id="demo-guide-copy"></p></div>
       <div class="demo-guide-bottom"><progress id="demo-progress" max="5" value="1" aria-label="Postęp przewodnika"></progress>
       <button id="demo-go" class="btn btn-secondary" type="button">Pokaż ten etap</button></div>`;
@@ -341,10 +341,10 @@
     const dialog = global.document.createElement('dialog');
     dialog.className = 'demo-welcome';
     dialog.setAttribute('aria-labelledby', 'demo-welcome-title');
-    dialog.innerHTML = `<p class="demo-eyebrow">WELES / INTERAKTYWNE DEMO</p><h1 id="demo-welcome-title">Od zamówienia<br>do gotowej paczki.</h1>
+    dialog.innerHTML = `<p class="demo-eyebrow">Weles / interaktywne demo</p><h1 id="demo-welcome-title">Od zamówienia<br>do gotowej paczki.</h1>
       <p class="demo-lead">Zobacz, jak wygląda dzień pracy z Weles. Przejdź przez kompletowanie i pakowanie na pięciu przykładowych zamówieniach.</p>
       <ol class="demo-flow"><li><span>01</span>Wybierz zamówienia</li><li><span>02</span>Zbierz produkty</li><li><span>03</span>Spakuj i zakończ</li></ol>
-      <div class="demo-welcome-actions"><button id="demo-start" class="btn btn-primary" autofocus type="button">Pokaż mi, jak to działa →</button>
+      <div class="demo-welcome-actions"><button id="demo-start" class="btn btn-primary" autofocus type="button">Rozpocznij przewodnik</button>
       <button id="demo-skip" class="btn btn-secondary" type="button">Pomiń — odkryję samodzielnie</button></div>
       <p class="demo-footnote">Bez logowania i połączenia z Allegro. Zmiany znikną po odświeżeniu. Etykiety i dokumenty są przykładowe.</p>`;
     global.document.body.append(dialog);

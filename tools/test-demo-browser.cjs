@@ -92,7 +92,7 @@ const server = http.createServer((req, res) => {
     const popupReady = page.waitForEvent('popup');
     await page.locator('#btn-label').click();
     const popup = await popupReady;
-    await page.waitForFunction(() => document.getElementById('btn-label').textContent.includes('✓'));
+    await page.waitForFunction(() => document.getElementById('btn-label').classList.contains('printed'));
     await popup.close();
     await page.locator('#btn-done').click();
     await page.waitForFunction(() => document.getElementById('count-done').textContent === '1');
@@ -144,7 +144,7 @@ const server = http.createServer((req, res) => {
     const lockerPopupReady = page.waitForEvent('popup');
     await page.locator('#btn-label').click();
     const lockerPopup = await lockerPopupReady;
-    await page.waitForFunction(() => document.getElementById('btn-label').textContent.includes('✓'));
+    await page.waitForFunction(() => document.getElementById('btn-label').classList.contains('printed'));
     await lockerPopup.close();
     await page.locator('[data-queue="pending"]').click();
     await page.locator('[data-queue="packing"]').click();
