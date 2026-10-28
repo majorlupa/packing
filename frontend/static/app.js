@@ -662,11 +662,13 @@ function clearStaticText(node) {
 }
 
 // Status line under a form: a render function keeps catalog text in sync with
-// the language, a raw string is shown verbatim.
-function showNote(node, content) {
+// the language, a raw string is shown verbatim. kind selects the status dot
+// color (ok = success, error = danger); the text itself carries no symbols.
+function showNote(node, content, kind = 'ok') {
   if (!node) return;
   if (typeof content === 'function') bindStaticText(node, content);
   else { clearStaticText(node); node.textContent = content; }
+  node.classList.toggle('note-error', kind === 'error');
   node.classList.remove('hidden');
 }
 
@@ -760,6 +762,24 @@ async function apiFetch(path, options = {}) {
   res = await send(token);
   if (res.status === 401 && accessToken === token) clearAccessToken();
   return res;
+}
+
+// Uniform monochrome outline icons (inline SVG, stroke currentColor). UI chrome
+// never uses emoji glyphs.
+const ICONS = {
+  refresh: '<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>',
+  chevronLeft: '<polyline points="15 18 9 12 15 6"/>',
+  chevronRight: '<polyline points="9 18 15 12 9 6"/>',
+  print: '<polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>',
+  pencil: '<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>',
+  revert: '<polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/>',
+  copy: '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  check: '<polyline points="20 6 9 17 4 12"/>',
+};
+
+function icon(name, extraClass = '') {
+  const cls = extraClass ? `icon ${extraClass}` : 'icon';
+  return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
 }
 
 // Escape every value that came from the API (Allegro data and settings) before it
@@ -882,10 +902,10 @@ function renderStateBanner(status) {
     // diagnostic detail beside a generic prefix that follows the language,
     // rather than guessing a translation for arbitrary text.
     const detail = status.message ? String(status.message) : '';
-    render = () => '⚠ ' + t('banner.problem') + (detail ? ' ' + detail : '');
+    render = () => t('banner.problem') + (detail ? ' ' + detail : '');
   } else if (status && status.quarantined) {
     const n = status.quarantined;
-    render = () => '⚠ ' + t('banner.quarantined', { n });
+    render = () => t('banner.quarantined', { n });
   }
   if (!render) {
     clearStaticText(el);
@@ -1017,7 +1037,7 @@ function renderPending(el) {
       <button class="btn btn-primary" id="btn-create-pl" disabled data-i18n="pending.createList">
         ${t('pending.createList')}
       </button>
-      <span id="selected-count" style="font-size:13px;color:#888">${t('pending.selectHint')}</span>
+      <span id="selected-count" class="count-hint">${t('pending.selectHint')}</span>
     </div>
     <div class="order-list" id="order-list"></div>
   `;
@@ -1029,7 +1049,7 @@ function renderPending(el) {
     // Seeding sample orders is a dry-run affordance. On a real instance the
     // backend rejects it, so the button must not be offered at all.
     const seedAction = state.dryRun
-      ? ` ${t('pending.emptyOr')} <button class="btn btn-secondary" id="btn-seed-sample" data-i18n="pending.seedSample" style="display:inline-block;margin-left:8px;padding:4px 8px;font-size:12px">${t('pending.seedSample')}</button>`
+      ? ` ${t('pending.emptyOr')} <button class="btn btn-secondary btn-inline" id="btn-seed-sample" data-i18n="pending.seedSample">${t('pending.seedSample')}</button>`
       : '';
     list.innerHTML = `<p class="empty"><span data-i18n="pending.emptyLead">${t('pending.emptyLead')}</span>${seedAction}.</p>`;
     const seedBtn = list.querySelector('#btn-seed-sample');
@@ -1167,10 +1187,10 @@ function renderPicking(el) {
           <button class="btn btn-secondary btn-rename-cancel" data-i18n="common.cancel">${t('common.cancel')}</button>
         </div>
       </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <button class="btn-icon-red btn-revert" data-id="${pl.id}" data-i18n-title="common.revertTitle" title="${esc(t('common.revertTitle'))}">↩</button>
-        <button class="btn btn-secondary btn-rename-toggle" data-id="${pl.id}">✏ <span data-i18n="picking.rename">${t('picking.rename')}</span></button>
-        <button class="btn btn-secondary btn-print-pl" data-id="${pl.id}">🖨 <span data-i18n="picking.print">${t('picking.print')}</span></button>
+      <div class="pl-actions">
+        <button class="btn-icon-red btn-revert" data-id="${pl.id}" data-i18n-title="common.revertTitle" data-i18n-aria="common.revertTitle" aria-label="${esc(t('common.revertTitle'))}" title="${esc(t('common.revertTitle'))}">${icon('revert')}</button>
+        <button class="btn btn-secondary btn-rename-toggle" data-id="${pl.id}">${icon('pencil')}<span data-i18n="picking.rename">${t('picking.rename')}</span></button>
+        <button class="btn btn-secondary btn-print-pl" data-id="${pl.id}">${icon('print')}<span data-i18n="picking.print">${t('picking.print')}</span></button>
         <button class="btn btn-primary btn-start-pack" data-id="${pl.id}" data-i18n="picking.start">${t('picking.start')}</button>
       </div>
     `;
@@ -1298,8 +1318,8 @@ function parcelSizeStatusText(order) {
 
 function labelButtonText(isLocker, printed, busy) {
   if (busy) return t('packing.generatingLabel');
-  const base = isLocker ? t('packing.labelLocker') : t('packing.labelCourier');
-  return printed ? `✓ ${base}` : `🖨 ${base}`;
+  // A printed state is conveyed by the button's styling (.printed), not text.
+  return isLocker ? t('packing.labelLocker') : t('packing.labelCourier');
 }
 
 function renderPackingCard(el) {
@@ -1329,21 +1349,21 @@ function renderPackingCard(el) {
 
   view.innerHTML = `
     <div class="pack-nav">
-      <button class="btn btn-secondary" id="btn-prev" ${idx === 0 ? 'disabled' : ''}>← <span data-i18n="packing.prev">${t('packing.prev')}</span></button>
+      <button class="btn btn-secondary" id="btn-prev" ${idx === 0 ? 'disabled' : ''}>${icon('chevronLeft')}<span data-i18n="packing.prev">${t('packing.prev')}</span></button>
       <span>${idx + 1} / ${orders.length}</span>
-      <button class="btn btn-secondary" id="btn-next" ${idx === orders.length - 1 ? 'disabled' : ''}><span data-i18n="packing.next">${t('packing.next')}</span> →</button>
+      <button class="btn btn-secondary" id="btn-next" ${idx === orders.length - 1 ? 'disabled' : ''}><span data-i18n="packing.next">${t('packing.next')}</span>${icon('chevronRight')}</button>
     </div>
     <div class="pack-card ${animClass}">
-      <button class="btn-icon-red btn-revert-pending" id="btn-revert-pending" data-i18n-title="common.revertTitle" title="${esc(t('common.revertTitle'))}">↩</button>
+      <button class="btn-icon-red btn-revert-pending" id="btn-revert-pending" data-i18n-title="common.revertTitle" data-i18n-aria="common.revertTitle" aria-label="${esc(t('common.revertTitle'))}" title="${esc(t('common.revertTitle'))}">${icon('revert')}</button>
       <div class="buyer">${esc(order.buyer_name)}</div>
       <div class="address">${esc(order.buyer_address)}</div>
       <div class="allegro-id">
         <span class="allegro-id-label">ID:</span>
         <span class="allegro-id-value">${esc(order.allegro_id)}</span>
-        <button class="btn-copy" data-copy="${esc(order.allegro_id)}" data-i18n-title="common.copyId" title="${esc(t('common.copyId'))}">⧉</button>
+        <button class="btn-copy" data-copy="${esc(order.allegro_id)}" data-i18n-title="common.copyId" data-i18n-aria="common.copyId" aria-label="${esc(t('common.copyId'))}" title="${esc(t('common.copyId'))}">${icon('copy', 'icon-copy')}${icon('check', 'icon-check')}</button>
       </div>
       <div class="items">${order.items.map(i => `${i.quantity}x ${esc(i.name)}`).join('<br/>')}</div>
-      ${order.tracking_number ? `<div class="tracking-info" style="color:#65dfb5;margin:8px 0;font-size:13px">📦 <span data-i18n="packing.trackingLabel">${t('packing.trackingLabel')}</span> <strong>${esc(order.tracking_number)}</strong></div>` : ''}
+      ${order.tracking_number ? `<div class="tracking-info"><span data-i18n="packing.trackingLabel">${t('packing.trackingLabel')}</span> <strong>${esc(order.tracking_number)}</strong></div>` : ''}
       ${isLocker ? `
       <fieldset class="parcel-sizes" ${pendingSize || order.shipment_id || order.tracking_number ? 'disabled' : ''}>
         <legend data-i18n="packing.lockerLegend">${t('packing.lockerLegend')}</legend>
@@ -1366,8 +1386,8 @@ function renderPackingCard(el) {
       <p id="parcel-size-status" class="parcel-size-note" role="status" aria-live="polite">${esc(parcelSizeStatusText(order))}</p>
       <div class="pack-buttons">
         <button class="btn btn-label" id="btn-label" ${lockerNeedsSize || pendingSize ? 'disabled' : ''}>${esc(labelButtonText(isLocker, Boolean(order.shipment_id), false))}</button>
-        <button class="btn btn-invoice" id="btn-document">🖨 <span data-i18n="${state.customDocAvailable ? 'packing.customDoc' : 'packing.invoice'}">${t(state.customDocAvailable ? 'packing.customDoc' : 'packing.invoice')}</span></button>
-        <button class="btn btn-done" id="btn-done">✓ <span data-i18n="packing.done">${t('packing.done')}</span></button>
+        <button class="btn btn-invoice" id="btn-document">${icon('print')}<span data-i18n="${state.customDocAvailable ? 'packing.customDoc' : 'packing.invoice'}">${t(state.customDocAvailable ? 'packing.customDoc' : 'packing.invoice')}</span></button>
+        <button class="btn btn-done" id="btn-done"><span data-i18n="packing.done">${t('packing.done')}</span></button>
       </div>
     </div>
   `;
@@ -1390,8 +1410,8 @@ function renderPackingCard(el) {
     copyBtn.addEventListener('click', async () => {
       try {
         await navigator.clipboard.writeText(copyBtn.dataset.copy);
-        copyBtn.textContent = '✓';
-        setTimeout(() => { copyBtn.textContent = '⧉'; }, 1200);
+        copyBtn.classList.add('copied');
+        setTimeout(() => { copyBtn.classList.remove('copied'); }, 1200);
       } catch (err) {
         reportError(t('err.copyId'), err);
       }
@@ -1533,9 +1553,9 @@ function renderDone(el) {
     const card = document.createElement('div');
     card.className = 'order-card';
     const labelHtml = order.tracking_number
-      ? `<div class="tracking-number">📦 ${esc(order.tracking_number)}</div>`
+      ? `<div class="tracking-number">${esc(order.tracking_number)}</div>`
       : order.shipment_id
-        ? `<div class="tracking-number">🏷 <span data-i18n="done.labelCreated">${t('done.labelCreated')}</span></div>`
+        ? `<div class="tracking-number"><span data-i18n="done.labelCreated">${t('done.labelCreated')}</span></div>`
         : `<div class="tracking-number missing" data-i18n="done.labelMissing">${t('done.labelMissing')}</div>`;
     card.innerHTML = `
       <div class="order-info">
@@ -1544,11 +1564,11 @@ function renderDone(el) {
         <div class="allegro-id">
           <span class="allegro-id-label">ID:</span>
           <span class="allegro-id-value">${esc(order.allegro_id)}</span>
-          <button class="btn-copy" data-copy="${esc(order.allegro_id)}" data-i18n-title="common.copyId" title="${esc(t('common.copyId'))}">⧉</button>
+          <button class="btn-copy" data-copy="${esc(order.allegro_id)}" data-i18n-title="common.copyId" data-i18n-aria="common.copyId" aria-label="${esc(t('common.copyId'))}" title="${esc(t('common.copyId'))}">${icon('copy', 'icon-copy')}${icon('check', 'icon-check')}</button>
         </div>
         ${labelHtml}
       </div>
-      <button class="btn btn-secondary btn-undo" data-id="${order.id}">↩ <span data-i18n="done.undo">${t('done.undo')}</span></button>
+      <button class="btn btn-secondary btn-undo" data-id="${order.id}">${icon('revert')}<span data-i18n="done.undo">${t('done.undo')}</span></button>
     `;
     list.appendChild(card);
   });
@@ -1557,8 +1577,8 @@ function renderDone(el) {
     btn.addEventListener('click', async () => {
       try {
         await navigator.clipboard.writeText(btn.dataset.copy);
-        btn.textContent = '✓';
-        setTimeout(() => { btn.textContent = '⧉'; }, 1200);
+        btn.classList.add('copied');
+        setTimeout(() => { btn.classList.remove('copied'); }, 1200);
       } catch (err) {
         reportError(t('err.copyId'), err);
       }
@@ -1660,11 +1680,11 @@ async function renderSettingsShipping(panel) {
         body: JSON.stringify(body),
       });
     } catch (err) {
-      showNote(note, '✗ ' + err.message);
+      showNote(note, err.message, 'error');
       return;
     }
     state.shipmentSettings = { sender: body.sender, package: body.package };
-    showNote(note, () => '✓ ' + t('settings.saved'));
+    showNote(note, () => t('settings.saved'));
     setTimeout(() => note.classList.add('hidden'), 3000);
   });
 }
@@ -1717,14 +1737,14 @@ async function renderSettingsDocuments(panel) {
       <p class="settings-desc" data-i18n="settings.customDocDesc">${t('settings.customDocDesc')}</p>
       <div class="custom-doc-status ${uploadAvailable ? 'available' : 'empty'}" id="custom-doc-status">
         ${uploadAvailable
-          ? `✓ <span data-i18n="settings.docUploaded">${t('settings.docUploaded')}</span><button class="btn btn-secondary btn-sm" id="btn-doc-delete" data-i18n="common.delete">${t('common.delete')}</button>`
+          ? `<span data-i18n="settings.docUploaded">${t('settings.docUploaded')}</span><button class="btn btn-secondary btn-sm" id="btn-doc-delete" data-i18n="common.delete">${t('common.delete')}</button>`
           : `<span class="dim" data-i18n="settings.docNone">${t('settings.docNone')}</span>`
         }
       </div>
-      <div class="settings-field" style="margin-top:12px">
-        <input type="file" id="custom-doc-file" accept=".pdf" style="display:none">
+      <div class="settings-field upload-field">
+        <input type="file" id="custom-doc-file" accept=".pdf" class="hidden">
         <button class="btn btn-secondary" id="btn-doc-pick">${uploadAvailable ? esc(t('settings.docReplace')) : esc(t('settings.docChoose'))}</button>
-        <span id="custom-doc-filename" class="dim" style="margin-left:10px;font-size:13px"></span>
+        <span id="custom-doc-filename" class="dim doc-file-name"></span>
       </div>
       <p id="custom-doc-note" class="settings-note hidden"></p>
     </div>
@@ -1766,9 +1786,9 @@ async function renderSettingsDocuments(panel) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      showNote(note, () => '✓ ' + t('settings.saved'));
+      showNote(note, () => t('settings.saved'));
     } catch (err) {
-      showNote(note, '✗ ' + err.message);
+      showNote(note, err.message, 'error');
     }
   });
 
@@ -1786,19 +1806,19 @@ async function renderSettingsDocuments(panel) {
     try {
       res = await apiFetch('/print/custom-doc', { method: 'POST', body: form });
     } catch (err) {
-      showNote(note, '✗ ' + err.message);
+      showNote(note, err.message, 'error');
       return;
     }
     if (res.ok) {
       await refreshCustomDocAvailability();
-      showNote(note, () => '✓ ' + t('settings.docUploadedOk'));
+      showNote(note, () => t('settings.docUploadedOk'));
       panel.querySelector('#custom-doc-status').outerHTML =
-        `<div class="custom-doc-status available" id="custom-doc-status">✓ <span data-i18n="settings.docUploaded">${t('settings.docUploaded')}</span><button class="btn btn-secondary btn-sm" id="btn-doc-delete" data-i18n="common.delete">${t('common.delete')}</button></div>`;
+        `<div class="custom-doc-status available" id="custom-doc-status"><span data-i18n="settings.docUploaded">${t('settings.docUploaded')}</span><button class="btn btn-secondary btn-sm" id="btn-doc-delete" data-i18n="common.delete">${t('common.delete')}</button></div>`;
       setText(panel.querySelector('#btn-doc-pick'), 'settings.docReplace');
       attachDeleteHandler(panel);
     } else {
       const err = await responseError(res);
-      showNote(note, '✗ ' + err.message);
+      showNote(note, err.message, 'error');
     }
   });
 
