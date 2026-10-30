@@ -43,5 +43,3 @@ def test_sync_backfills_item_metadata(client, app_env, monkeypatch):
     assert client.post("/api/orders/sync").json()["updated"] == 1
     assert client.get("/api/orders/", params={"product": "sku1"}).json()[0]["id"] == "o-1"
     assert client.post("/api/orders/sync").json()["updated"] == 0
-
-

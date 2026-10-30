@@ -24,5 +24,3 @@ def test_blank_product_does_not_issue_an_extra_request():
     api.add("GET", "/api/orders/", json_body=[])
     assert asyncio.run(api.tools().list_orders(product="  "))["count"] == 0
     assert len(api.requests) == 1
-
-
