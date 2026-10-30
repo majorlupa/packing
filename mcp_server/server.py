@@ -1,10 +1,11 @@
-"""FastMCP wiring: turns PackingTools methods into MCP tools."""
+"""MCP server wiring: turns PackingTools methods into MCP tools."""
+import functools
 import inspect
-import os
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
-from .client import PackingClient
+from .client import PackingClient, PackingError
 from .config import Settings
 from .tools import PackingTools
 
@@ -84,23 +85,38 @@ for this MCP server; never ask for it in chat.
 """
 
 
+def as_mcp_tool(method):
+    """Report the app's own error message to the model.
+
+    mcp 2.x only treats ``ToolError`` as an anticipated failure and sends its message
+    in the result; any other exception is a crash the model sees as "Error executing
+    tool <name>". Domain errors stay ``PackingError``, so translate them here.
+    """
+
+    @functools.wraps(method)
+    async def tool(*args, **kwargs):
+        try:
+            return await method(*args, **kwargs)
+        except PackingError as exc:
+            raise ToolError(str(exc)) from exc
+
+    return tool
+
+
 def create_server(
     settings: Settings | None = None,
     *,
     client: PackingClient | None = None,
-    host: str | None = None,
-    port: int | None = None,
-) -> FastMCP:
-    """Build the MCP server with every tool registered."""
+) -> MCPServer:
+    """Build the MCP server with every tool registered.
+
+    Transport options (host, port) are not part of the server in mcp 2.x; pass them
+    to ``MCPServer.run()`` when serving streamable HTTP.
+    """
     settings = settings or Settings.from_env()
     tools = PackingTools(client or PackingClient(settings), settings)
-    server = FastMCP(
-        "packing",
-        instructions=INSTRUCTIONS,
-        host=host or os.getenv("PACKING_MCP_HOST", "127.0.0.1"),
-        port=port or int(os.getenv("PACKING_MCP_PORT", "8765")),
-    )
+    server = MCPServer("packing", instructions=INSTRUCTIONS)
     for name in TOOL_NAMES:
         method = getattr(tools, name)
-        server.add_tool(method, name=name, description=inspect.getdoc(method))
+        server.add_tool(as_mcp_tool(method), name=name, description=inspect.getdoc(method))
     return server
