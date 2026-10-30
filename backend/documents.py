@@ -235,17 +235,30 @@ def render_document_html(template: DocumentTemplate, order: Order) -> str:
             '</style></head><body>' + ''.join(sections) + '</body></html>')
 
 
+def document_url_fetcher(allowed_images: frozenset[str]):
+    """Fetcher that only serves the template's own logo data URIs.
+
+    Never fetch a URL supplied by an operator or embedded in order data. It has to
+    subclass WeasyPrint's URLFetcher: since 69.0 ``weasyprint.urls.fetch`` reads
+    ``url_fetcher._fail_on_errors`` when a fetch raises, so a plain function turns
+    a rejected resource into an AttributeError instead of a skipped image.
+    """
+    from weasyprint.urls import URLFetcher, URLFetcherResponse
+
+    class DocumentURLFetcher(URLFetcher):
+        def fetch(self, url, headers=None):
+            if url not in allowed_images:
+                raise ValueError("Document resource access denied")
+            return URLFetcherResponse(url, body=validate_logo(url),
+                                      headers={"Content-Type": url.split(';', 1)[0][5:]})
+
+    return DocumentURLFetcher()
+
+
 def render_document_pdf(template: DocumentTemplate, order: Order) -> bytes:
     from weasyprint import HTML
-    from weasyprint.urls import URLFetcherResponse
-    # Never fetch a URL supplied by an operator or embedded in order data.
-    allowed_images = {block.image for block in template.blocks if block.type == "logo" and block.image}
 
-    def fetch(url, *args, **kwargs):
-        if url not in allowed_images:
-            raise ValueError("Document resource access denied")
-        return URLFetcherResponse(url, body=validate_logo(url),
-                                  headers={"Content-Type": url.split(';', 1)[0][5:]})
-
-    return HTML(string=render_document_html(template, order), url_fetcher=fetch).write_pdf()
+    allowed_images = frozenset(block.image for block in template.blocks if block.type == "logo" and block.image)
+    fetcher = document_url_fetcher(allowed_images)
+    return HTML(string=render_document_html(template, order), url_fetcher=fetcher).write_pdf()
 

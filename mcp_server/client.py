@@ -196,9 +196,10 @@ class PackingClient:
 
     # ---- orders and queues ----
 
-    async def get_orders(self) -> list:
-        """GET /api/orders/"""
-        return await self._request("GET", "/orders/")
+    async def get_orders(self, product: str | None = None) -> list:
+        """GET /api/orders/, optionally filtering line items server-side."""
+        params = {"product": product} if product else None
+        return await self._request("GET", "/orders/", params=params)
 
     async def order_action(self, order_id: str, action: str) -> dict:
         """POST /api/orders/{id}/done | undo-done | revert-pending"""

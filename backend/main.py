@@ -36,6 +36,10 @@ CORS_ORIGINS = [
     if origin.strip()
 ]
 
+# Mirrors the access-token policy in routes/setup.py: a short shared secret is not a
+# secret. Anything shorter is treated as "webhook not configured" and answers 503.
+WEBHOOK_SECRET_MIN_LENGTH = 32
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     status = store.state_status()
@@ -93,6 +97,14 @@ api.include_router(setup_router)
 app.include_router(api)
 
 
+@app.post("/api/webhooks/sync", tags=["webhooks"])
+async def webhook_sync():
+    """Trigger the same order sync as the UI, authenticated by the webhook secret."""
+    from routes.orders import sync_from_allegro
+
+    return await sync_from_allegro()
+
+
 @app.middleware("http")
 async def require_api_token(request: Request, call_next):
     """Protect the API; allow public status and a limited first-run bootstrap."""
@@ -108,6 +120,21 @@ async def require_api_token(request: Request, call_next):
             and not requires_access_token()
         )
     ):
+        return await call_next(request)
+
+    if request.url.path == "/api/webhooks/sync":
+        expected = os.getenv("PACKING_WEBHOOK_SECRET", "").strip()
+        if len(expected) < WEBHOOK_SECRET_MIN_LENGTH:
+            return JSONResponse(status_code=503, content={"detail": "Webhook is disabled."})
+        authorization = request.headers.get("authorization", "")
+        scheme, _, supplied = authorization.partition(" ")
+        if scheme.lower() != "bearer" or not hmac.compare_digest(
+            supplied.encode("utf-8"), expected.encode("utf-8")
+        ):
+            return JSONResponse(
+                status_code=401, content={"detail": "Webhook authentication required."},
+                headers={"WWW-Authenticate": "Bearer", "Cache-Control": "no-store"},
+            )
         return await call_next(request)
 
     expected = os.getenv("PACKING_ACCESS_TOKEN", "")

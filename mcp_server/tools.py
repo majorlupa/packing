@@ -145,6 +145,7 @@ class PackingTools:
         status: OrderStatus | None = None,
         courier: str | None = None,
         search: str | None = None,
+        product: str | None = None,
     ) -> dict:
         """List the orders in the queues, optionally filtered.
 
@@ -152,11 +153,12 @@ class PackingTools:
         (Oczekujące), picking (Kompletowanie), packing (Pakowanie), done (Gotowe).
         "courier" matches the delivery category or courier name (for example
         "inpost_locker" or "Paczkomat"). "search" matches buyer name, address or
-        Allegro order id. Filtering happens locally over the same endpoint the UI
-        uses, so an unknown order is simply absent.
+        Allegro order id. "product" is a case-insensitive substring of a line
+        item name, SKU or offer id, filtered server-side. Other filters are local.
+        Queue counts always describe all orders, regardless of filters.
         """
         orders = await self.client.get_orders()
-        selected = orders
+        selected = await self.client.get_orders(product=product.strip()) if product and product.strip() else orders
         if status is not None:
             selected = [order for order in selected if order.get("status") == status]
         if courier:
@@ -360,6 +362,8 @@ class PackingTools:
         The printer argument wins over the PACKING_PRINTER environment variable; with
         neither set, CUPS uses its default queue. Returns the saved PDF path, the
         CUPS job id, the printer, and the shipment id/tracking number.
+        With PACKING_PRINT_DIR set, saves a virtual print instead of invoking lp;
+        print_path identifies that PDF. This does NOT prevent shipment purchases.
         """
         validate_print_request(copies)
         order = await self._find_order(order_id)
@@ -398,11 +402,13 @@ class PackingTools:
             "bytes": len(content),
             "printer": job.printer,
             "job_id": job.job_id,
+            "print_path": job.output_path,
+            "print_dry_run": job.output_path is not None,
             "shipment_id": shipment_id,
             "tracking_number": tracking_number,
             "shipment_created_now": shipment_created,
             "message": (
-                f"Label queued on {job.printer}"
+                (f"Label saved to {job.output_path}" if job.output_path else f"Label queued on {job.printer}")
                 + (f" as job {job.job_id}" if job.job_id else "")
                 + (" (new shipment created)" if shipment_created else " (existing shipment reused)")
             ),
@@ -441,7 +447,8 @@ class PackingTools:
         when a custom document is configured, otherwise GET
         /api/print/orders/{id}/document, or the explicit kind. The PDF is fetched
         with the matching route and sent to `lp` (PACKING_PRINTER or the CUPS
-        default queue).
+        default queue). PACKING_PRINT_DIR instead saves a virtual print and
+        returns print_path, with print_dry_run=true and no CUPS job id.
         """
         validate_print_request(copies)
         order = await self._find_order(order_id)
@@ -462,7 +469,12 @@ class PackingTools:
             "bytes": len(content),
             "printer": job.printer,
             "job_id": job.job_id,
-            "message": f"Document queued on {job.printer}" + (f" as job {job.job_id}" if job.job_id else ""),
+            "print_path": job.output_path,
+            "print_dry_run": job.output_path is not None,
+            "message": (
+                f"Document saved to {job.output_path}" if job.output_path
+                else f"Document queued on {job.printer}" + (f" as job {job.job_id}" if job.job_id else "")
+            ),
         }
 
     # ---- settings ----

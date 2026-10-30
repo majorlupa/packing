@@ -216,6 +216,20 @@ def test_logo_and_bounded_canvas_table_pdf(app_env):
     assert any('/XObject' in page['/Resources'] for page in reader.pages)
 
 
+def test_document_fetcher_denies_foreign_urls_without_failing_the_render(app_env):
+    # WeasyPrint >= 69 reads url_fetcher._fail_on_errors when a fetch raises, so the
+    # fetcher must be a URLFetcher subclass; otherwise a rejected resource crashes
+    # the render with AttributeError instead of being skipped.
+    from documents import document_url_fetcher
+    from weasyprint import HTML
+    fetcher = document_url_fetcher(frozenset())
+    with pytest.raises(ValueError):
+        fetcher('https://example.com/logo.png')
+    pdf = HTML(string='<p>Body</p><img src="https://example.com/logo.png">', url_fetcher=fetcher).write_pdf()
+    assert pdf.startswith(b'%PDF-')
+    assert 'Body' in '\n'.join(page.extract_text() for page in PdfReader(io.BytesIO(pdf)).pages)
+
+
 def test_invalid_saved_settings_quarantined_without_losing_orders(app_env):
     state = app_env.default_state({'o-1':sample_order()})
     state['document_settings'] = {'version':42, 'secret-design':'keep me'}
