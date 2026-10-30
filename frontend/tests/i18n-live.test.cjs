@@ -229,13 +229,13 @@ test('quarantine banner follows the language and survives dynamicText.clear()', 
   const context = loadContext({ document: makeDocument(new Map([['state-banner', banner]])) });
 
   context.renderStateBanner({ quarantined: 3 });
-  assert.equal(banner.textContent, '⚠ 3 rekordy pominięto — dane nie przechodzą walidacji.');
+  assert.equal(banner.textContent, '3 rekordy pominięto — dane nie przechodzą walidacji.');
 
   // renderQueue() clears dynamicText on every view rebuild; the banner must not
   // be bound there or it would freeze after the first navigation.
   vm.runInContext('dynamicText.clear();', context);
   context.setLanguage('en');
-  assert.equal(banner.textContent, '⚠ 3 records were skipped — they failed validation.');
+  assert.equal(banner.textContent, '3 records were skipped — they failed validation.');
 });
 
 test('banner fallback and backend detail follow the language without translating raw data', () => {
@@ -243,14 +243,14 @@ test('banner fallback and backend detail follow the language without translating
   const context = loadContext({ document: makeDocument(new Map([['state-banner', banner]])) });
 
   context.renderStateBanner({ ok: false });
-  assert.equal(banner.textContent, '⚠ Problem ze stanem aplikacji.');
+  assert.equal(banner.textContent, 'Problem ze stanem aplikacji.');
   context.setLanguage('en');
-  assert.equal(banner.textContent, '⚠ There is a problem with the application state.');
+  assert.equal(banner.textContent, 'There is a problem with the application state.');
 
   context.renderStateBanner({ ok: false, message: 'Soubor je poškozený' });
-  assert.equal(banner.textContent, '⚠ There is a problem with the application state. Soubor je poškozený');
+  assert.equal(banner.textContent, 'There is a problem with the application state. Soubor je poškozený');
   context.setLanguage('pl');
-  assert.equal(banner.textContent, '⚠ Problem ze stanem aplikacji. Soubor je poškozený',
+  assert.equal(banner.textContent, 'Problem ze stanem aplikacji. Soubor je poškozený',
     'the backend detail is kept verbatim while the prefix switches');
 });
 
@@ -315,15 +315,15 @@ test('settings success note follows the language while a raw error does not', as
   const note = panel.querySelector('#invoice-settings-note');
 
   await save.dispatch('click');
-  assert.equal(note.textContent, '✓ Zapisano');
+  assert.equal(note.textContent, 'Zapisano');
   context.setLanguage('en');
-  assert.equal(note.textContent, '✓ Saved', 'the success note is re-rendered on switch');
+  assert.equal(note.textContent, 'Saved', 'the success note is re-rendered on switch');
 
   context.rejectInvoice = true;
   await save.dispatch('click');
-  assert.equal(note.textContent, '✗ upstream down');
+  assert.equal(note.textContent, 'upstream down');
   context.setLanguage('pl');
-  assert.equal(note.textContent, '✗ upstream down', 'a raw upstream error is never translated');
+  assert.equal(note.textContent, 'upstream down', 'a raw upstream error is never translated');
 });
 
 test('shipping success note follows the language', async () => {
@@ -338,9 +338,9 @@ test('shipping success note follows the language', async () => {
   await context.renderSettingsShipping(panel);
   await panel.querySelector('#shipping-save').dispatch('click');
   const note = panel.querySelector('#shipping-note');
-  assert.equal(note.textContent, '✓ Zapisano');
+  assert.equal(note.textContent, 'Zapisano');
   context.setLanguage('en');
-  assert.equal(note.textContent, '✓ Saved');
+  assert.equal(note.textContent, 'Saved');
 });
 
 // ---- Pending label generation ----

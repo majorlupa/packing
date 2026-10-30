@@ -1,32 +1,87 @@
-/* Responsive A4 canvas; percentage geometry corresponds exactly to millimetres. */
-.settings-editor-card { width: 100%; max-width: none; min-width: 0; margin-top: 28px; padding: 24px; border: 1px solid var(--surface2); border-radius: var(--radius); background: var(--surface); scroll-margin-top: 20px; container-type: inline-size; }
-.editor-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); gap: 24px; align-items: start; }
-.editor-side-panel { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.editor-side-panel h4 { font-size: 14px; }
+/* Responsive A4 canvas; percentage geometry corresponds exactly to millimetres.
+ * The canvas itself stays paper-white — it previews a printed page. */
+
+.settings-editor-card {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  margin-top: var(--space-5);
+  padding: var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  scroll-margin-top: var(--space-5);
+  container-type: inline-size;
+}
+.settings-editor-card h3 { font-size: var(--text-lg); margin-bottom: var(--space-1); }
+.editor-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); gap: var(--space-5); align-items: start; }
+.editor-side-panel { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.editor-side-panel h4 { font-size: var(--text-md); }
 .editor-side-panel .editor-add { flex-wrap: wrap; }
 .editor-blocks, .editor-block, .editor-template, .editor-collection > * { min-width: 0; }
 .editor-collection > *, .editor-side-panel input, .editor-side-panel select { max-width: 100%; }
 .editor-token { overflow-wrap: anywhere; }
 .editor-canvas-wrap { min-width: 0; }
-.editor-canvas-instructions { font-size: 12px; color: var(--text-dim); margin: 0 0 10px; }
-.editor-canvas { position: relative; width: 100%; aspect-ratio: 210 / 297; container-type: inline-size; overflow: hidden; background: #fff; color: #111; box-shadow: 0 2px 14px #0004; font-family: Arial, sans-serif; }
+.editor-canvas-instructions { font-size: var(--text-xs); color: var(--text-muted); margin: 0 0 var(--space-2); }
+.editor-canvas {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 210 / 297;
+  container-type: inline-size;
+  overflow: hidden;
+  background: #fff;
+  color: #111;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  font-family: var(--font-sans);
+}
 .editor-canvas-block { position: absolute; box-sizing: border-box; cursor: move; touch-action: none; outline: 1px dashed #aaa7; line-height: 1.2; }
-.editor-canvas-block.selected, .editor-canvas-block:focus-visible { outline: 2px solid #087fba; z-index: 1; }
+.editor-canvas-block.selected, .editor-canvas-block:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; z-index: 1; }
 .editor-canvas-content { height: 100%; width: 100%; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
 .editor-canvas-content img { width: 100%; height: 100%; object-fit: contain; }
 .editor-canvas-content table { width: 100%; border-collapse: collapse; table-layout: fixed; font: inherit; white-space: normal; }
 .editor-canvas-content th, .editor-canvas-content td { padding: 1.43cqw; border-bottom: 1px solid #ddd; overflow-wrap: anywhere; }
 .editor-canvas-content th:first-child, .editor-canvas-content td:first-child { width: 48%; }
 .editor-canvas-block[data-type="line"] .editor-canvas-content { border-top: 1px solid #111; box-sizing: border-box; }
-.editor-resize { position: absolute; right: 0; bottom: 0; padding: 0; width: 18px; height: 18px; font-size: 14px; background: #087fba; color: #fff; border: 0; cursor: nwse-resize; touch-action: none; display: none; }
+.editor-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  padding: 0;
+  width: 18px;
+  height: 18px;
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  border-radius: 0;
+  cursor: nwse-resize;
+  touch-action: none;
+  display: none;
+}
 .editor-canvas-block.selected .editor-resize, .editor-canvas-block:focus-within .editor-resize { display: block; }
 .editor-block:not(.selected) > :not(.editor-block-head) { display: none; }
-.editor-block.selected { border-color: #087fba; }
-.editor-geometry-label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--text-dim); }
-.editor-geometry-label input { width: 58px; padding: 5px; border: 1px solid #555; border-radius: 4px; background: var(--bg); color: var(--text); }
-.editor-collection { display: flex; flex-wrap: wrap; gap: 8px; }
-.editor-collection select, .editor-collection button { padding: 7px 10px; border: 1px solid #555; border-radius: 4px; background: var(--surface2); color: var(--text); }
-.editor-collection :disabled { opacity: .5; }
-.editor-warnings { font-size: 12px; color: var(--accent); min-height: 1em; }
+.editor-block.selected { border-color: var(--accent); }
+.editor-geometry-label { display: flex; flex-direction: column; gap: 2px; font-size: var(--text-xs); color: var(--text-muted); }
+.editor-geometry-label input {
+  width: 58px;
+  padding: var(--space-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+}
+.editor-collection { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.editor-collection select, .editor-collection button {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: background var(--transition);
+}
+.editor-collection button:hover { background: var(--hover); }
+.editor-collection :disabled { opacity: 0.5; cursor: default; }
+.editor-warnings { font-size: var(--text-xs); color: var(--warning); min-height: 1em; }
 @container (max-width: 760px) { .editor-workspace { grid-template-columns: minmax(0, 1fr); } }
-@media (max-width: 850px) { .editor-workspace { grid-template-columns: minmax(0, 1fr); } .settings-editor-card { padding: 14px; } }
+@media (max-width: 850px) { .editor-workspace { grid-template-columns: minmax(0, 1fr); } .settings-editor-card { padding: var(--space-3); } }

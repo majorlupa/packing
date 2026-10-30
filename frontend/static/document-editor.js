@@ -31,6 +31,19 @@ var DocumentEditor = (function () {
   var collectionBusy = false;
   var importConflict = 'rename';
 
+  // Uniform monochrome outline icons (inline SVG, stroke currentColor); the
+  // block controls carry their meaning through title/aria-label, not glyphs.
+  var EDITOR_ICONS = {
+    up: '<polyline points="18 15 12 9 6 15"/>',
+    down: '<polyline points="6 9 12 15 18 9"/>',
+    remove: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+    resize: '<line x1="8" y1="8" x2="16" y2="16"/><polyline points="16 10 16 16 10 16"/>',
+  };
+
+  function iconSvg(name) {
+    return '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + EDITOR_ICONS[name] + '</svg>';
+  }
+
   function el(tag, className) {
     var node = document.createElement(tag);
     if (className) addClass(node, className);
@@ -238,11 +251,11 @@ var DocumentEditor = (function () {
     node.setAttribute('aria-label', t(key));
   }
 
-  function iconButton(className, glyph, key) {
+  function iconButton(className, name, key) {
     var button = document.createElement('button');
     button.setAttribute('type', 'button');
     addClass(button, className);
-    button.textContent = glyph;
+    button.innerHTML = iconSvg(name);
     button.setAttribute('data-i18n-title', key);
     button.setAttribute('title', t(key));
     labelControl(button, key);
@@ -269,11 +282,11 @@ var DocumentEditor = (function () {
     var title = el('span', 'editor-block-title');
     setText(title, TYPE_LABEL[block.type]);
     head.appendChild(title);
-    head.addEventListener('click', function (event) { if (event.target.tagName === 'BUTTON') return; draft.selectedIndex = index; syncGeometryInputs(ctx); refreshCanvas(ctx); });
+    head.addEventListener('click', function (event) { if ([up, down, remove].some(function (button) { return button.contains(event.target); })) return; draft.selectedIndex = index; syncGeometryInputs(ctx); refreshCanvas(ctx); });
 
-    var up = iconButton('editor-block-up', '↑', 'doc.moveUp');
-    var down = iconButton('editor-block-down', '↓', 'doc.moveDown');
-    var remove = iconButton('editor-block-remove', '✕', 'doc.removeBlock');
+    var up = iconButton('editor-block-up', 'up', 'doc.moveUp');
+    var down = iconButton('editor-block-down', 'down', 'doc.moveDown');
+    var remove = iconButton('editor-block-remove', 'remove', 'doc.removeBlock');
     up.disabled = index === 0;
     down.disabled = index === draft.blocks.length - 1;
     up.addEventListener('click', function () { moveBlock(ctx, index, -1); });
@@ -503,7 +516,7 @@ var DocumentEditor = (function () {
       var content = el('div', 'editor-canvas-content');
       if (block.type === 'logo') { var img = el('img'); img.setAttribute('alt', ''); content.appendChild(img); }
       node.appendChild(content);
-      var resize = iconButton('editor-resize', '↘', 'doc.resize'); node.appendChild(resize);
+      var resize = iconButton('editor-resize', 'resize', 'doc.resize'); node.appendChild(resize);
       function select() { draft.selectedIndex = index; syncGeometryInputs(ctx); refreshCanvas(ctx); }
       node.addEventListener('click', select);
       node.addEventListener('keydown', function (event) {
@@ -524,7 +537,7 @@ var DocumentEditor = (function () {
         if (event.button !== undefined && event.button !== 0) return;
         event.preventDefault(); select(); node.focus();
         var rect = canvas.getBoundingClientRect();
-        gesture = { id: event.pointerId, x: event.clientX, y: event.clientY, block: { x: block.x, y: block.y, w: block.w, h: block.h }, resize: event.target === resize, width: rect.width, height: rect.height };
+        gesture = { id: event.pointerId, x: event.clientX, y: event.clientY, block: { x: block.x, y: block.y, w: block.w, h: block.h }, resize: resize.contains(event.target), width: rect.width, height: rect.height };
         if (node.setPointerCapture) node.setPointerCapture(event.pointerId);
       });
       node.addEventListener('pointermove', function (event) {
