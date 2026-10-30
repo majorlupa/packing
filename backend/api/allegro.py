@@ -605,6 +605,8 @@ def _order_from_form(form: dict) -> Order:
             name=li["offer"]["name"],
             quantity=li["quantity"],
             unit_price=float(li["price"]["amount"]) if li.get("price") else None,
+            sku=(li["offer"].get("external") or {}).get("id"),
+            offer_id=li["offer"].get("id"),
         )
         for li in form.get("lineItems") or []
     ]

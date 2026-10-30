@@ -16,6 +16,8 @@ class OrderItem(BaseModel):
     name: str
     quantity: int
     unit_price: float | None = None
+    sku: str | None = None
+    offer_id: str | None = None
 
 
 class Order(BaseModel):

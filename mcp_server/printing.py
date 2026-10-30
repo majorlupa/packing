@@ -1,11 +1,13 @@
-"""Send PDFs to a local printer through CUPS.
+"""Send PDFs to CUPS, or save virtual prints with PACKING_PRINT_DIR.
 
 ``lp`` is the CUPS client. The destination printer comes from PACKING_PRINTER or
 the tool argument; when neither is set CUPS prints on its default queue.
 """
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,9 +18,19 @@ MAX_COPIES = 99
 
 
 def validate_print_request(copies: int) -> str:
-    """Check local prerequisites before any carrier booking and return lp's path."""
+    """Check prerequisites before carrier booking; return lp's path or an empty string for file mode."""
     if not isinstance(copies, int) or isinstance(copies, bool) or not 1 <= copies <= MAX_COPIES:
         raise PackingError(f"copies must be a whole number between 1 and {MAX_COPIES}")
+    directory = os.getenv("PACKING_PRINT_DIR", "").strip()
+    if directory:
+        try:
+            target = Path(directory).expanduser()
+            target.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryFile(dir=target):
+                pass
+        except OSError as exc:
+            raise PackingError(f"Cannot write to PACKING_PRINT_DIR: {exc}") from None
+        return ""
     executable = shutil.which("lp")
     if executable is None:
         raise PackingError(
@@ -33,6 +45,7 @@ class PrintJob:
     job_id: str | None
     printer: str
     output: str
+    output_path: str | None = None
 
 
 def print_pdf(
@@ -42,7 +55,11 @@ def print_pdf(
     copies: int = 1,
     title: str | None = None,
 ) -> PrintJob:
-    """Print an existing PDF file with ``lp`` and return the queued job."""
+    """Print a PDF with ``lp``, or save a private copy in PACKING_PRINT_DIR.
+
+    File mode writes one PDF per call regardless of copies (the PDF is unchanged).
+    It does not suppress carrier bookings made by the caller.
+    """
     executable = validate_print_request(copies)
 
     path = Path(path)
@@ -55,6 +72,23 @@ def print_pdf(
         raise PackingError(f"Cannot read {path}: {exc}") from None
     if magic != b"%PDF-":
         raise PackingError(f"Refusing to print {path}: it is not a PDF file.")
+
+    directory = os.getenv("PACKING_PRINT_DIR", "").strip()
+    if directory:
+        target = None
+        try:
+            fd, filename = tempfile.mkstemp(prefix="print-", suffix=".pdf", dir=Path(directory).expanduser())
+            target = Path(filename)
+            with os.fdopen(fd, "wb") as destination, path.open("rb") as source:
+                shutil.copyfileobj(source, destination)
+        except OSError as exc:
+            if target is not None:
+                target.unlink(missing_ok=True)
+            raise PackingError(f"Cannot save virtual print: {exc}") from None
+        return PrintJob(
+            job_id=None, printer="file", output=f"Saved PDF (requested copies: {copies})",
+            output_path=str(target),
+        )
 
     command = [executable]
     if printer:

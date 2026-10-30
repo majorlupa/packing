@@ -496,6 +496,116 @@ Language switching updates text in place rather than rebuilding forms or queues.
 The backend serves the static frontend and API on port 3001. State and Allegro
 tokens are persisted in `data/` across container restarts.
 
+### Product filtering, inbound sync, and printer-free testing
+
+#### Filter orders by product
+
+MCP `list_orders(product="LEGO", status="pending")` matches a case-insensitive
+substring in any line item's name, SKU (Allegro `offer.external.id`), or offer ID.
+It combines with the existing status, courier, and buyer/address search filters.
+The backend also exposes `GET /api/orders/?product=LEGO` (normal API bearer token
+required). Omitting `product` leaves the UI and existing clients unchanged.
+MCP `queue_counts` still describes the whole queue, not just matching orders.
+
+For a batch, pass the returned local order IDs to `create_picking_list`, then
+call `start_packing` with its list ID. Preview the `list_orders` result before
+making those state changes. No batch mutation happens when listing orders.
+Older orders gain missing SKU/offer metadata on their next sync when their line
+item names and quantities still match; existing item data is not overwritten.
+
+#### Inbound order-sync webhook
+
+Set `PACKING_WEBHOOK_SECRET` in `.env` to a separate, randomly generated secret
+(at least 32 characters — the same minimum as `PACKING_ACCESS_TOKEN`), then
+recreate the backend container:
+
+```sh
+docker compose up -d --force-recreate packing
+# Supply the secret securely in the caller's environment, not in the URL.
+curl --fail-with-body -X POST http://localhost:3001/api/webhooks/sync \
+  -H "Authorization: Bearer ${PACKING_WEBHOOK_SECRET}"
+```
+
+This endpoint requires **only the dedicated webhook bearer secret**, not the UI/API
+access token. Comparison is constant-time. An unset, empty or too-short secret
+disables it (HTTP 503); missing or incorrect authentication returns HTTP 401. Keep it distinct
+from `PACKING_ACCESS_TOKEN` so the external caller cannot access the other APIs.
+The endpoint ignores the request body and triggers only an order sync; it does
+not accept arbitrary commands, create shipments, or change packing status.
+It waits for completion and returns `{"added": 0, "updated": 0, "total": 0}` with
+actual counts. Allegro authorization/upstream errors use the same responses as
+`POST /api/orders/sync`. Repeated calls deduplicate stored orders by Allegro ID.
+
+Keep the default localhost binding for local callers. For remote services, use
+an authenticated TLS reverse proxy or private tunnel; do not expose plain HTTP
+or place the secret in query strings or logs. Apply rate limits at the proxy.
+
+#### Five-minute sync in Docker
+
+The optional `packing-sync` Compose service runs the existing headless loop,
+without an LLM or browser. It waits for the backend health check, syncs immediately,
+then waits `PACKING_SYNC_INTERVAL` seconds (default 300) after each attempt.
+Failures are logged and retried at the next interval.
+
+```sh
+# First complete Allegro authorization and ensure .env has PACKING_ACCESS_TOKEN.
+docker compose --profile sync up -d --build
+docker compose logs -f packing-sync
+# Stop automatic sync while leaving the UI running:
+docker compose stop packing-sync
+```
+
+Set `PACKING_SYNC_INTERVAL=600` in `.env` for ten-minute intervals. The worker
+uses `http://packing:3001` over the Compose network and the normal access token;
+it needs no public port, webhook secret, state volume, or printer. If onboarding
+or token rotation changed `.env`, recreate the worker to reload its environment:
+`docker compose --profile sync up -d --force-recreate packing-sync`.
+
+#### Print PDFs without a physical printer
+
+MCP printing supports a virtual file destination. Set these variables in the
+**MCP process environment** (it does not automatically load `.env`):
+
+```sh
+export PACKING_PRINT_DIR="$PWD/data/virtual-prints"
+export PACKING_LABEL_DIR="$PWD/data/downloads"
+python -m mcp_server serve
+```
+
+Both `print_label` and `print_document` now validate and save PDFs without needing
+CUPS or invoking `lp`. Each invocation writes one uniquely named, owner-only PDF
+to `PACKING_PRINT_DIR`, even when multiple copies are requested. Results contain
+`printer: "file"`, `job_id: null`, `print_dry_run: true`, and the saved `print_path`;
+`path` remains the separately downloaded source PDF. An invalid/unwritable output
+directory fails preflight before any label booking. Files contain customer data:
+protect the directory and remove old PDFs according to your retention policy.
+Unset `PACKING_PRINT_DIR` to resume normal CUPS printing.
+
+**Print dry-run is not shipment dry-run.** `print_label` can still buy a real
+shipment if none exists. For safe end-to-end tests also set
+`PACKING_SHIPMENT_DRY_RUN=true` on the **backend** and recreate it. Alternatively,
+use `print_document` or `download_label`; `create_if_missing=false` on `print_label`
+refuses to buy a missing shipment.
+
+To test actual CUPS queueing instead, install `cups-client` and `printer-driver-cups-pdf`
+(on Debian/Ubuntu), configure the PDF queue, find its name with `lpstat -p`, and
+set `PACKING_PRINTER=PDF` (or its actual name). Leave `PACKING_PRINT_DIR` unset.
+The CUPS PDF printer's destination/permissions are configured in the host's
+`/etc/cups/cups-pdf.conf`; check its output directory after a job.
+
+For a real printer later, configure a queue on host CUPS or a network CUPS server.
+The bundled backend image does **not** install `lp`; for MCP printing in Docker,
+use a derived image with `cups-client`, run the MCP process there, and either:
+
+- Bind-mount `/run/cups/cups.sock:/run/cups/cups.sock` and set
+  `CUPS_SERVER=/run/cups/cups.sock`; allow container UID 1000 to access the socket.
+- Set `CUPS_SERVER=printer-host:631` for a reachable network CUPS server with the
+  desired queue configured, then set `PACKING_PRINTER` to that queue's name.
+
+Keep CUPS restricted to trusted clients. A raw IPP/network printer must first be
+configured as a CUPS queue; `PACKING_PRINTER` is a queue name, not a device URI.
+Browser print dialogs remain unchanged and use the browser machine's printers.
+
 ### MCP control (LLM)
 
 `mcp_server/` holds an MCP server that performs the same actions as the UI by
