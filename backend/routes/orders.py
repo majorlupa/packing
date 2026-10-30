@@ -82,10 +82,15 @@ def _oauth_error_page(language: str, message: str, status_code: int = 400) -> HT
 
 
 @router.get("/", response_model=list[dict])
-def list_orders():
+def list_orders(product: str | None = None):
     orders = store.get_orders()
+    needle = (product or "").strip().casefold()
     return [{**o.model_dump(), "delivery_type": "inpost_locker" if o.is_inpost_locker else "courier"}
-            for o in orders.values()]
+            for o in orders.values()
+            if not needle or any(
+                needle in (value or "").casefold()
+                for item in o.items for value in (item.name, item.sku, item.offer_id)
+            )]
 
 
 @router.get("/status")
@@ -139,6 +144,19 @@ async def sync_from_allegro():
                 if stored.get(field) is None and payload.get(field) is not None:
                     stored[field] = payload[field]
                     dirty = True
+            # Only backfill item metadata when the line items still match exactly.
+            # Never replace quantities/names on an order already being packed.
+            old_items = stored.get("items", [])
+            new_items = payload["items"]
+            if len(old_items) == len(new_items) and all(
+                old.get("name") == new["name"] and old.get("quantity") == new["quantity"]
+                for old, new in zip(old_items, new_items, strict=True)
+            ):
+                for old, new in zip(old_items, new_items, strict=True):
+                    for field in ("sku", "offer_id"):
+                        if old.get(field) is None and new.get(field) is not None:
+                            old[field] = new[field]
+                            dirty = True
             if dirty:
                 updated += 1
         return added, updated

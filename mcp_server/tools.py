@@ -145,6 +145,7 @@ class PackingTools:
         status: OrderStatus | None = None,
         courier: str | None = None,
         search: str | None = None,
+        product: str | None = None,
     ) -> dict:
         """List the orders in the queues, optionally filtered.
 
@@ -152,11 +153,12 @@ class PackingTools:
         (Oczekujące), picking (Kompletowanie), packing (Pakowanie), done (Gotowe).
         "courier" matches the delivery category or courier name (for example
         "inpost_locker" or "Paczkomat"). "search" matches buyer name, address or
-        Allegro order id. Filtering happens locally over the same endpoint the UI
-        uses, so an unknown order is simply absent.
+        Allegro order id. "product" is a case-insensitive substring of a line
+        item name, SKU or offer id, filtered server-side. Other filters are local.
+        Queue counts always describe all orders, regardless of filters.
         """
         orders = await self.client.get_orders()
-        selected = orders
+        selected = await self.client.get_orders(product=product.strip()) if product and product.strip() else orders
         if status is not None:
             selected = [order for order in selected if order.get("status") == status]
         if courier:
