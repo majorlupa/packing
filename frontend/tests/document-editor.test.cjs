@@ -112,6 +112,10 @@ class Dom {
     node.isConnected = false;
     return node;
   }
+  contains(node) {
+    for (; node; node = node.parentNode) if (node === this) return true;
+    return false;
+  }
   remove() { if (this.parentNode) this.parentNode.removeChild(this); this.isConnected = false; }
   addEventListener(type, handler) { (this.listeners[type] = this.listeners[type] || []).push(handler); }
   dispatch(type, extra = {}) {
