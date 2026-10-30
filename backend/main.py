@@ -36,6 +36,10 @@ CORS_ORIGINS = [
     if origin.strip()
 ]
 
+# Mirrors the access-token policy in routes/setup.py: a short shared secret is not a
+# secret. Anything shorter is treated as "webhook not configured" and answers 503.
+WEBHOOK_SECRET_MIN_LENGTH = 32
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     status = store.state_status()
@@ -119,8 +123,8 @@ async def require_api_token(request: Request, call_next):
         return await call_next(request)
 
     if request.url.path == "/api/webhooks/sync":
-        expected = os.getenv("PACKING_WEBHOOK_SECRET", "")
-        if not expected:
+        expected = os.getenv("PACKING_WEBHOOK_SECRET", "").strip()
+        if len(expected) < WEBHOOK_SECRET_MIN_LENGTH:
             return JSONResponse(status_code=503, content={"detail": "Webhook is disabled."})
         authorization = request.headers.get("authorization", "")
         scheme, _, supplied = authorization.partition(" ")

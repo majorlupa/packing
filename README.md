@@ -516,7 +516,8 @@ item names and quantities still match; existing item data is not overwritten.
 #### Inbound order-sync webhook
 
 Set `PACKING_WEBHOOK_SECRET` in `.env` to a separate, randomly generated secret
-(at least 32 characters recommended), then recreate the backend container:
+(at least 32 characters — the same minimum as `PACKING_ACCESS_TOKEN`), then
+recreate the backend container:
 
 ```sh
 docker compose up -d --force-recreate packing
@@ -526,8 +527,8 @@ curl --fail-with-body -X POST http://localhost:3001/api/webhooks/sync \
 ```
 
 This endpoint requires **only the dedicated webhook bearer secret**, not the UI/API
-access token. Comparison is constant-time. An unset/empty secret disables it
-(HTTP 503); missing or incorrect authentication returns HTTP 401. Keep it distinct
+access token. Comparison is constant-time. An unset, empty or too-short secret
+disables it (HTTP 503); missing or incorrect authentication returns HTTP 401. Keep it distinct
 from `PACKING_ACCESS_TOKEN` so the external caller cannot access the other APIs.
 The endpoint ignores the request body and triggers only an order sync; it does
 not accept arbitrary commands, create shipments, or change packing status.
