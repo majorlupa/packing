@@ -1,0 +1,4 @@
+# Runtime dependencies of the MCP server. It talks to the app over HTTP, so it
+# does not need the backend's FastAPI/weasyprint stack installed.
+mcp==1.30.0
+httpx==0.28.1
