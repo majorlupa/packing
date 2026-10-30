@@ -81,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
 
     command = args.command or "serve"
     if command == "serve":
-        server = create_server(settings, host=args.host, port=args.port)
+        server = create_server(settings)
         logger.info(
             "Starting Packing MCP server (transport=%s, api=%s, token=%s, printer=%s)",
             args.transport,
@@ -90,7 +90,15 @@ def main(argv: list[str] | None = None) -> int:
             settings.printer or "CUPS default",
         )
         try:
-            server.run(transport="streamable-http" if args.transport == "streamable-http" else "stdio")
+            if args.transport == "streamable-http":
+                # mcp 2.x takes transport options on run(), not on the server.
+                server.run(
+                    transport="streamable-http",
+                    host=args.host or os.getenv("PACKING_MCP_HOST", "127.0.0.1"),
+                    port=args.port or int(os.getenv("PACKING_MCP_PORT", "8765")),
+                )
+            else:
+                server.run(transport="stdio")
         except KeyboardInterrupt:
             return 0
         return 0
