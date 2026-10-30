@@ -19,6 +19,17 @@ jobs:
       - run: python -m pytest -q backend/tests
       - run: ruff check backend
 
+  mcp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r mcp_server/requirements.txt -r backend/requirements-dev.txt ruff
+      - run: python -m pytest -q mcp_server/tests
+      - run: ruff check mcp_server
+
   frontend:
     runs-on: ubuntu-latest
     steps:
