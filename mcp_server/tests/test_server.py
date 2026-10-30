@@ -6,7 +6,7 @@ import logging
 import httpx
 import pytest
 from helpers import FakeAPI, make_order
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver.exceptions import ToolError
 
 import mcp_server.__main__ as cli
 from mcp_server.client import PackingError
@@ -44,8 +44,9 @@ def test_mcp_round_trip_returns_json_content():
     server = create_server(_settings(), client=api.client())
 
     result = asyncio.run(server.call_tool("list_orders", {"status": "pending"}))
-    assert len(result) == 1
-    payload = json.loads(result[0].text)
+    # mcp 2.x returns a CallToolResult instead of a bare sequence of content blocks.
+    assert len(result.content) == 1
+    payload = json.loads(result.content[0].text)
     assert payload["count"] == 1
     assert payload["orders"][0]["id"] == "o1"
 
@@ -57,6 +58,24 @@ def test_mcp_tool_errors_reach_the_client_with_the_app_message():
 
     with pytest.raises(ToolError, match="not in the queue"):
         asyncio.run(server.call_tool("get_order", {"order_id": "ghost"}))
+
+
+def test_tool_errors_carry_the_app_message_over_the_wire():
+    # mcp 2.x only forwards ToolError messages to the model; anything else becomes
+    # "Error executing tool <name>", so the app's own text has to survive a real call.
+    from mcp.client import Client
+
+    api = FakeAPI()
+    api.add("GET", "/api/orders/", json_body=[])
+    server = create_server(_settings(), client=api.client())
+
+    async def call():
+        async with Client(server) as client:
+            return await client.call_tool("get_order", {"order_id": "ghost"})
+
+    result = asyncio.run(call())
+    assert result.is_error is True
+    assert "is not in the queue" in result.content[0].text
 
 
 def test_sync_loop_runs_the_requested_number_of_syncs():
@@ -107,10 +126,20 @@ def test_cli_defaults_to_serve_on_stdio():
 
 def test_cli_without_subcommand_starts_stdio(monkeypatch):
     transports = []
-    monkeypatch.setattr("mcp.server.fastmcp.FastMCP.run",
+    monkeypatch.setattr("mcp.server.mcpserver.MCPServer.run",
                         lambda self, *, transport: transports.append(transport))
     assert cli.main([]) == 0
     assert transports == ["stdio"]
+
+
+def test_cli_streamable_http_passes_host_and_port_to_run(monkeypatch):
+    monkeypatch.delenv("PACKING_MCP_HOST", raising=False)
+    monkeypatch.delenv("PACKING_MCP_PORT", raising=False)
+    calls = []
+    monkeypatch.setattr("mcp.server.mcpserver.MCPServer.run",
+                        lambda self, **kwargs: calls.append(kwargs))
+    assert cli.main(["serve", "--transport", "streamable-http", "--port", "9000"]) == 0
+    assert calls == [{"transport": "streamable-http", "host": "127.0.0.1", "port": 9000}]
 
 
 def test_cli_parses_streamable_http_and_sync_loop():
