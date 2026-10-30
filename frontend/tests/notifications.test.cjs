@@ -92,5 +92,5 @@ test('frontend has no alert calls, preserves confirmations and persistent access
   const html = fs.readFileSync('frontend/index.html', 'utf8');
   assert.match(html, /id="toast-info"[^>]*role="status"[^>]*aria-live="polite"[^>]*aria-atomic="true"/);
   assert.match(html, /id="toast-error"[^>]*role="alert"[^>]*aria-live="assertive"[^>]*aria-atomic="true"/);
-  assert.match(source, /const err = await responseError\(res\);\s*showNote\(note, '✗ ' \+ err.message\)/);
+  assert.match(source, /const err = await responseError\(res\);\s*showNote\(note, err\.message, 'error'\)/);
 });
