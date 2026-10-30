@@ -13,6 +13,12 @@ RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 COPY backend /app/backend
 COPY frontend /app/frontend
 
+# The same image can run the headless sync worker or MCP printing tools.
+COPY mcp_server/requirements.txt /app/mcp_server/requirements.txt
+RUN pip install --no-cache-dir -r /app/mcp_server/requirements.txt
+COPY mcp_server /app/mcp_server
+ENV PYTHONPATH=/app
+
 # Run as the host user's uid/gid (1000) so the mounted ./data stays writable
 # by the operator instead of becoming root-owned.
 RUN groupadd --gid 1000 packing && useradd --uid 1000 --gid 1000 --no-create-home packing \

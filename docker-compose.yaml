@@ -1,4 +1,21 @@
 services:
+  packing-sync:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: [sync]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PACKING_API_URL: http://packing:3001
+      PACKING_SYNC_INTERVAL: ${PACKING_SYNC_INTERVAL:-300}
+    command: [python, -m, mcp_server, sync-loop]
+    depends_on:
+      packing:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+
   packing:
     build:
       context: .
